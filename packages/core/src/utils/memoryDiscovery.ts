@@ -141,7 +141,7 @@ async function getGeminiMdFilePathsInternal(
             `Checking for ${geminiMdFilename} in (upward scan): ${currentDir}`,
           );
         }
-  
+
         // Skip the global .gemini directory itself during upward scan from CWD,
         // as global is handled separately and explicitly first.
         if (currentDir === path.join(resolvedHome, LLXPRT_CONFIG_DIR)) {
@@ -152,7 +152,7 @@ async function getGeminiMdFilePathsInternal(
           }
           break;
         }
-  
+
         const potentialPath = path.join(currentDir, geminiMdFilename);
         try {
           await fs.access(potentialPath, fsSync.constants.R_OK);
@@ -162,11 +162,11 @@ async function getGeminiMdFilePathsInternal(
         } catch {
           // Not found, continue.
         }
-  
+
         if (currentDir === ultimateStopDir) {
           break;
         }
-  
+
         currentDir = path.dirname(currentDir);
       }
       upwardPaths.forEach((p) => allPaths.add(p));

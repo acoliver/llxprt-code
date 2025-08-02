@@ -12,7 +12,7 @@ import { TestRig, printDebugInfo, validateModelOutput } from './test-helper.js';
 const skipInCI = process.env.LLXPRT_AUTH_TYPE === 'none';
 const testFn = skipInCI ? test.skip : test;
 
-testFn('should be able to search the web', async (t) => {
+testFn('should be able to search the web', async () => {
   const rig = new TestRig();
   await rig.setup('should be able to search the web');
 
