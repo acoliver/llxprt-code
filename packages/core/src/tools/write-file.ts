@@ -280,7 +280,7 @@ export class WriteFileTool
             gitStats = await gitStatsService.trackFileEdit(
               params.file_path,
               originalContent || '',
-              fileContent
+              fileContent,
             );
           } catch (error) {
             // Don't fail the write if git stats tracking fails
