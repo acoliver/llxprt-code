@@ -171,7 +171,7 @@ export class GeminiCompatibleWrapper {
       functionDeclarations?: Array<{
         name: string;
         description?: string;
-        parameters?: unknown;
+        parametersJsonSchema?: unknown;
       }>;
     }>,
   ): ProviderTool[] {
@@ -181,14 +181,25 @@ export class GeminiCompatibleWrapper {
       if (tool.functionDeclarations) {
         // Gemini format has functionDeclarations array
         for (const func of tool.functionDeclarations) {
+          // FunctionDeclaration from @google/genai uses parametersJsonSchema
+          const schema = func.parametersJsonSchema;
+
+          if (process.env.DEBUG) {
+            console.log(
+              `[GeminiCompatibleWrapper] Converting tool ${func.name}:`,
+            );
+            console.log(`  Schema:`, JSON.stringify(schema, null, 2));
+          }
+
           providerTools.push({
             type: 'function' as const,
             function: {
               name: func.name,
               description: func.description || '',
-              parameters: (this.convertGeminiSchemaToStandard(
-                func.parameters,
-              ) as Record<string, unknown>) ?? {
+              parameters: (this.convertGeminiSchemaToStandard(schema) as Record<
+                string,
+                unknown
+              >) ?? {
                 type: 'object',
                 properties: {},
                 required: [],

@@ -39,7 +39,7 @@ describe('GeminiCompatibleWrapper', () => {
             {
               name: 'test_tool',
               description: 'A test tool',
-              parameters: {
+              parametersJsonSchema: {
                 type: Type.OBJECT,
                 properties: {
                   stringParam: {
@@ -154,7 +154,7 @@ describe('GeminiCompatibleWrapper', () => {
             {
               name: 'test_tool',
               description: 'A test tool',
-              parameters: {
+              parametersJsonSchema: {
                 type: 'object',
                 properties: {
                   stringParam: {

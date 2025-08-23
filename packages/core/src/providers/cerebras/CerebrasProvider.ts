@@ -296,10 +296,13 @@ export class CerebrasProvider extends BaseProvider {
             'openai',
           );
           requestBody.tools = openaiTools;
+          // CRITICAL: Add tool_choice to force Cerebras to use tools instead of just narrating
+          requestBody.tool_choice = 'auto';
           this.logger.debug(
             () =>
               `Tools formatted successfully: ${JSON.stringify(openaiTools).substring(0, 500)}...`,
           );
+          this.logger.debug(() => `Tool choice set to: auto`);
         } catch (toolError) {
           this.logger.debug(() => `Error formatting tools: ${toolError}`);
           // Continue without tools if formatting fails
