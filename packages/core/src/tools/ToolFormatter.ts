@@ -30,7 +30,14 @@ export class ToolFormatter implements IToolFormatter {
    * Converts Gemini schema format (with uppercase Type enums) to standard JSON Schema format
    */
   private convertGeminiSchemaToStandard(schema: unknown): unknown {
+    this.logger.debug(
+      () => `convertGeminiSchemaToStandard input: ${JSON.stringify(schema)}`,
+    );
+
     if (!schema || typeof schema !== 'object') {
+      this.logger.debug(
+        () => `Schema is not an object, returning as-is: ${schema}`,
+      );
       return schema;
     }
 
@@ -58,8 +65,17 @@ export class ToolFormatter implements IToolFormatter {
 
     // Convert type from UPPERCASE enum to lowercase string
     if (newSchema.type) {
+      const originalType = newSchema.type;
       newSchema.type = String(newSchema.type).toLowerCase();
+      this.logger.debug(
+        () => `Converted type from ${originalType} to ${newSchema.type}`,
+      );
     }
+
+    this.logger.debug(
+      () =>
+        `convertGeminiSchemaToStandard output: ${JSON.stringify(newSchema)}`,
+    );
 
     return newSchema;
   }
@@ -75,23 +91,42 @@ export class ToolFormatter implements IToolFormatter {
           () => `Converting ${tools.length} tools to ${format} format`,
         );
         return tools.map((tool) => {
+          // Log the incoming tool structure
+          this.logger.debug(
+            () =>
+              `=== ToolFormatter: Processing tool ${tool.function.name} ===`,
+          );
+          this.logger.debug(
+            () => `Input tool structure: ${JSON.stringify(tool, null, 2)}`,
+          );
+          this.logger.debug(
+            () =>
+              `Tool parameters before conversion: ${JSON.stringify(tool.function.parameters, null, 2)}`,
+          );
+
+          const convertedParams = this.convertGeminiSchemaToStandard(
+            tool.function.parameters,
+          );
+
+          this.logger.debug(
+            () =>
+              `Tool parameters after conversion: ${JSON.stringify(convertedParams, null, 2)}`,
+          );
+
           const converted = {
             type: 'function' as const,
             function: {
               name: tool.function.name,
               description: tool.function.description,
-              parameters: this.convertGeminiSchemaToStandard(
-                tool.function.parameters,
-              ),
+              parameters: convertedParams,
             },
           };
+
           this.logger.debug(
-            () => `Converted tool ${tool.function.name} to ${format} format:`,
-            {
-              original: tool.function.parameters,
-              converted: converted.function.parameters,
-            },
+            () =>
+              `Final converted tool for ${format}: ${JSON.stringify(converted, null, 2)}`,
           );
+
           return converted;
         });
       case 'anthropic':
