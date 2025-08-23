@@ -10,6 +10,7 @@ import {
   OpenAIProvider,
   AnthropicProvider,
   GeminiProvider,
+  CerebrasProvider,
   sanitizeForByteString,
   needsSanitization,
 } from '@vybestack/llxprt-code-core';
@@ -238,6 +239,41 @@ export function getProviderManager(
       oauthManager,
     );
     providerManagerInstance.registerProvider(anthropicProvider);
+
+    // Always register Cerebras provider
+    // Priority: Environment variable > keyfile
+    let cerebrasApiKey: string | undefined;
+
+    if (process.env.CEREBRAS_API_KEY) {
+      cerebrasApiKey = sanitizeApiKey(process.env.CEREBRAS_API_KEY);
+    }
+
+    if (!cerebrasApiKey) {
+      try {
+        const apiKeyPath = join(homedir(), '.cerebras_key');
+        if (fs.existsSync(apiKeyPath)) {
+          const rawKey = fs.readFileSync(apiKeyPath, 'utf-8').trim();
+          cerebrasApiKey = sanitizeApiKey(rawKey);
+        }
+      } catch (_error) {
+        // No Cerebras keyfile available, that's OK
+      }
+    }
+
+    const cerebrasBaseUrl = process.env.CEREBRAS_BASE_URL;
+    const cerebrasProviderConfig = {
+      allowBrowserEnvironment,
+      getEphemeralSettings: config
+        ? () => config.getEphemeralSettings()
+        : undefined,
+    };
+    const cerebrasProvider = new CerebrasProvider(
+      cerebrasApiKey || undefined,
+      cerebrasBaseUrl,
+      cerebrasProviderConfig,
+      undefined, // No OAuth manager for Cerebras
+    );
+    providerManagerInstance.registerProvider(cerebrasProvider);
 
     // Set default provider to gemini
     providerManagerInstance.setActiveProvider('gemini');
