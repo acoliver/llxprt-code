@@ -145,6 +145,12 @@ export class CerebrasProvider extends BaseProvider {
     tools?: ITool[],
     _toolFormat?: string,
   ): AsyncIterableIterator<unknown> {
+    this.logger.debug(
+      () => '=== CEREBRAS: Starting generateChatCompletion ===',
+    );
+    this.logger.debug(() => `Input messages count: ${messages.length}`);
+    this.logger.debug(() => `Tools provided: ${tools?.length || 0}`);
+
     const authToken = await this.getAuthToken();
     if (!authToken) {
       throw new Error('Authentication required for Cerebras API calls');
@@ -153,6 +159,7 @@ export class CerebrasProvider extends BaseProvider {
     const streamingSetting =
       this._config?.getEphemeralSettings?.()?.['streaming'];
     const streamingEnabled = streamingSetting !== 'disabled';
+    this.logger.debug(() => `Streaming enabled: ${streamingEnabled}`);
 
     const apiCall = async () => {
       let systemMessage: string | undefined;
@@ -161,20 +168,41 @@ export class CerebrasProvider extends BaseProvider {
         content: string;
       }> = [];
 
+      this.logger.debug(() => '=== CEREBRAS: Converting messages ===');
       for (const msg of messages) {
+        this.logger.debug(
+          () =>
+            `Processing message: role=${msg.role}, hasContent=${!!msg.content}, hasToolCalls=${!!msg.tool_calls}`,
+        );
+
         if (msg.role === 'system') {
           systemMessage = msg.content;
+          this.logger.debug(
+            () =>
+              `System message captured: ${systemMessage?.substring(0, 100)}...`,
+          );
         } else if (msg.role === 'tool') {
-          cerebrasMessages.push({
-            role: 'assistant',
-            content: `Tool ${msg.tool_call_id} result: ${msg.content}`,
-          });
+          // Convert tool results to user messages as Cerebras doesn't have a specific tool role
+          // This might need to be adjusted based on how Cerebras expects tool results
+          const toolMsg = {
+            role: 'user', // Changed from 'assistant' to 'user'
+            content: `Tool result for ${msg.tool_call_id}: ${msg.content}`,
+          };
+          cerebrasMessages.push(toolMsg);
+          this.logger.debug(
+            () =>
+              `Tool result converted to user message: ${JSON.stringify(toolMsg)}`,
+          );
         } else if (msg.role === 'assistant') {
           let content = flattenMessageContent(msg.content);
           if (msg.tool_calls) {
+            this.logger.debug(
+              () => `Assistant has ${msg.tool_calls!.length} tool calls`,
+            );
             for (const toolCall of msg.tool_calls) {
               const name = toolCall.function?.name || 'unknown';
               const args = toolCall.function?.arguments || '{}';
+              this.logger.debug(() => `Tool call: ${name} with args: ${args}`);
               content += `\nCalling tool ${name} with arguments: ${args}`;
             }
           }
@@ -183,22 +211,50 @@ export class CerebrasProvider extends BaseProvider {
             role: 'assistant',
             content,
           });
+          this.logger.debug(
+            () =>
+              `Assistant message processed: ${content.substring(0, 100)}...`,
+          );
         } else if (msg.role === 'user') {
+          const userContent = flattenMessageContent(msg.content);
           cerebrasMessages.push({
             role: 'user',
-            content: flattenMessageContent(msg.content),
+            content: userContent,
           });
+          this.logger.debug(
+            () => `User message: ${userContent.substring(0, 100)}...`,
+          );
         }
       }
 
-      cerebrasMessages.filter((msg) => msg.content.trim() !== '');
+      // Filter out empty messages
+      const messagesToSend = cerebrasMessages.filter(
+        (msg) => msg.content.trim() !== '',
+      );
+      this.logger.debug(
+        () =>
+          `Messages after filtering: ${messagesToSend.length} (was ${cerebrasMessages.length})`,
+      );
+      messagesToSend.forEach((msg, i) => {
+        this.logger.debug(
+          () =>
+            `Message ${i}: role=${msg.role}, content=${msg.content.substring(0, 100)}...`,
+        );
+      });
 
       const modelInfo = cerebrasModels[this.currentModel];
+      this.logger.debug(() => `Using model: ${this.currentModel}`);
+      this.logger.debug(() => `Model info: ${JSON.stringify(modelInfo)}`);
+
       const temperature =
         (this.modelParams?.temperature as number | undefined) ??
         CEREBRAS_DEFAULT_TEMPERATURE;
+      this.logger.debug(() => `Temperature: ${temperature}`);
 
       const actualModelId: string = this.currentModel;
+      this.logger.debug(
+        () => `Model params: ${JSON.stringify(this.modelParams)}`,
+      );
 
       const requestBody: Record<string, unknown> = {
         model: actualModelId,
@@ -206,7 +262,7 @@ export class CerebrasProvider extends BaseProvider {
           ...(systemMessage
             ? [{ role: 'system', content: systemMessage }]
             : []),
-          ...cerebrasMessages,
+          ...messagesToSend,
         ],
         stream: streamingEnabled,
         ...(modelInfo.maxOutputTokens > 0 && modelInfo.maxOutputTokens <= 32768
@@ -219,17 +275,42 @@ export class CerebrasProvider extends BaseProvider {
       };
 
       if (tools && tools.length > 0) {
+        this.logger.debug(() => '=== CEREBRAS: Formatting tools ===');
+        this.logger.debug(() => `Number of tools: ${tools.length}`);
+        tools.forEach((tool, i) => {
+          this.logger.debug(
+            () =>
+              `Tool ${i}: name=${tool.function.name}, hasParams=${!!tool.function.parameters}`,
+          );
+          if (tool.function.parameters) {
+            this.logger.debug(
+              () =>
+                `Tool ${i} params: ${JSON.stringify(tool.function.parameters)}`,
+            );
+          }
+        });
+
         try {
           const openaiTools = this.toolFormatter.toProviderFormat(
             tools,
             'openai',
           );
           requestBody.tools = openaiTools;
+          this.logger.debug(
+            () =>
+              `Tools formatted successfully: ${JSON.stringify(openaiTools).substring(0, 500)}...`,
+          );
         } catch (toolError) {
           this.logger.debug(() => `Error formatting tools: ${toolError}`);
           // Continue without tools if formatting fails
         }
       }
+
+      this.logger.debug(() => '=== CEREBRAS: Sending request ===');
+      this.logger.debug(() => `URL: ${this.baseURL}/chat/completions`);
+      this.logger.debug(
+        () => `Request body: ${JSON.stringify(requestBody, null, 2)}`,
+      );
 
       const response = await fetch(`${this.baseURL}/chat/completions`, {
         method: 'POST',
@@ -239,6 +320,11 @@ export class CerebrasProvider extends BaseProvider {
         },
         body: JSON.stringify(requestBody),
       });
+
+      this.logger.debug(
+        () =>
+          `Response status: ${response.status} ${response.ok ? 'OK' : 'ERROR'}`,
+      );
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -277,6 +363,9 @@ export class CerebrasProvider extends BaseProvider {
       });
 
       if (streamingEnabled) {
+        this.logger.debug(
+          () => '=== CEREBRAS: Processing streaming response ===',
+        );
         if (!response.body) {
           throw new Error('No response body from Cerebras API');
         }
@@ -310,9 +399,14 @@ export class CerebrasProvider extends BaseProvider {
                   }
 
                   const parsed = JSON.parse(jsonStr);
+                  this.logger.debug(
+                    () =>
+                      `Chunk: ${JSON.stringify(parsed).substring(0, 200)}...`,
+                  );
 
                   if (parsed.choices?.[0]?.delta?.content) {
                     const content = parsed.choices[0].delta.content;
+                    this.logger.debug(() => `Content chunk: "${content}"`);
                     yield {
                       role: 'assistant',
                       content,
@@ -320,13 +414,24 @@ export class CerebrasProvider extends BaseProvider {
                   }
 
                   if (parsed.choices?.[0]?.delta?.tool_calls) {
+                    this.logger.debug(
+                      () => `=== CEREBRAS: Tool call delta detected ===`,
+                    );
                     const toolCallDelta = parsed.choices[0].delta.tool_calls[0];
+                    this.logger.debug(
+                      () => `Tool call delta: ${JSON.stringify(toolCallDelta)}`,
+                    );
+
                     if (toolCallDelta && toolCallDelta.id) {
                       currentToolCall = {
                         id: toolCallDelta.id,
                         name: toolCallDelta.function?.name || '',
                         arguments: toolCallDelta.function?.arguments || '',
                       };
+                      this.logger.debug(
+                        () =>
+                          `New tool call started: id=${currentToolCall?.id}, name=${currentToolCall?.name}`,
+                      );
                     } else if (
                       currentToolCall &&
                       toolCallDelta &&
@@ -334,6 +439,10 @@ export class CerebrasProvider extends BaseProvider {
                     ) {
                       currentToolCall.arguments +=
                         toolCallDelta.function.arguments;
+                      this.logger.debug(
+                        () =>
+                          `Tool call arguments appended: ${toolCallDelta.function.arguments}`,
+                      );
                     }
                   }
 
@@ -341,7 +450,15 @@ export class CerebrasProvider extends BaseProvider {
                     parsed.choices?.[0]?.finish_reason === 'tool_calls' &&
                     currentToolCall
                   ) {
-                    yield {
+                    this.logger.debug(
+                      () => `=== CEREBRAS: Tool call completed ===`,
+                    );
+                    this.logger.debug(() => `Tool: ${currentToolCall?.name}`);
+                    this.logger.debug(
+                      () => `Arguments: ${currentToolCall?.arguments}`,
+                    );
+
+                    const toolCallMessage = {
                       role: 'assistant',
                       content: '',
                       tool_calls: [
@@ -349,13 +466,25 @@ export class CerebrasProvider extends BaseProvider {
                           id: currentToolCall.id,
                           type: 'function' as const,
                           function: {
-                            name: currentToolCall.name,
-                            arguments: currentToolCall.arguments,
+                            name: currentToolCall?.name || '',
+                            arguments: currentToolCall?.arguments || '',
                           },
                         },
                       ],
-                    } as IMessage;
+                    };
+
+                    this.logger.debug(
+                      () =>
+                        `Yielding tool call: ${JSON.stringify(toolCallMessage)}`,
+                    );
+                    yield toolCallMessage as IMessage;
                     currentToolCall = undefined;
+                  }
+
+                  if (parsed.choices?.[0]?.finish_reason) {
+                    this.logger.debug(
+                      () => `Finish reason: ${parsed.choices[0].finish_reason}`,
+                    );
                   }
 
                   if (parsed.usage) {
@@ -396,7 +525,14 @@ export class CerebrasProvider extends BaseProvider {
           },
         } as IMessage;
       } else {
+        this.logger.debug(
+          () => '=== CEREBRAS: Processing non-streaming response ===',
+        );
         const result = await response.json();
+        this.logger.debug(
+          () => `Response: ${JSON.stringify(result).substring(0, 500)}...`,
+        );
+
         const message = result.choices?.[0]?.message;
 
         if (!message) {
@@ -409,18 +545,32 @@ export class CerebrasProvider extends BaseProvider {
         };
 
         if (message.tool_calls) {
+          this.logger.debug(
+            () =>
+              `=== CEREBRAS: Tool calls in response: ${message.tool_calls.length} ===`,
+          );
+          message.tool_calls.forEach((tc: unknown, i: number) => {
+            this.logger.debug(() => `Tool call ${i}: ${JSON.stringify(tc)}`);
+          });
+
           responseMessage.tool_calls = message.tool_calls.map(
             (tc: {
               id: string;
               function?: { name: string; arguments: string };
-            }) => ({
-              id: tc.id,
-              type: 'function' as const,
-              function: {
-                name: tc.function?.name || '',
-                arguments: tc.function?.arguments || '',
-              },
-            }),
+            }) => {
+              const toolCall = {
+                id: tc.id,
+                type: 'function' as const,
+                function: {
+                  name: tc.function?.name || '',
+                  arguments: tc.function?.arguments || '',
+                },
+              };
+              this.logger.debug(
+                () => `Mapped tool call: ${JSON.stringify(toolCall)}`,
+              );
+              return toolCall;
+            },
           );
         }
 
@@ -437,11 +587,21 @@ export class CerebrasProvider extends BaseProvider {
           };
         }
 
+        this.logger.debug(() => `=== CEREBRAS: Yielding final response ===`);
+        this.logger.debug(
+          () => `Final message: ${JSON.stringify(responseMessage)}`,
+        );
         yield responseMessage;
       }
+
+      this.logger.debug(
+        () => '=== CEREBRAS: Request completed successfully ===',
+      );
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
+      this.logger.debug(() => `=== CEREBRAS: Error occurred ===`);
+      this.logger.debug(() => `Error: ${errorMessage}`);
       throw new Error(`Cerebras API error: ${errorMessage}`);
     }
   }

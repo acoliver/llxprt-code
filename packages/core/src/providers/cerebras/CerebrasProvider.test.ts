@@ -207,12 +207,15 @@ describe('CerebrasProvider', () => {
 
       const tools: ITool[] = [
         {
-          name: 'test_tool',
-          description: 'A test tool',
-          parameters: {
-            type: 'object',
-            properties: {
-              arg: { type: 'string' },
+          type: 'function',
+          function: {
+            name: 'test_tool',
+            description: 'A test tool',
+            parameters: {
+              type: 'object',
+              properties: {
+                arg: { type: 'string' },
+              },
             },
           },
         },
