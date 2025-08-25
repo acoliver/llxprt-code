@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { IProvider, IModel, ITool, IMessage } from './IProvider.js';
+import { IProvider, IModel, ITool, Content } from './IProvider.js';
+import { ContentGeneratorRole } from './ContentGeneratorRole.js';
 import { Config, RedactionConfig } from '../config/config.js';
 import {
   logConversationRequest,
@@ -17,7 +18,7 @@ import {
 import { getConversationFileWriter } from '../storage/ConversationFileWriter.js';
 
 export interface ConversationDataRedactor {
-  redactMessage(message: IMessage, provider: string): IMessage;
+  redactContent(content: Content, provider: string): Content;
   redactToolCall(tool: ITool): ITool;
   redactResponseContent(content: string, provider: string): string;
 }
@@ -26,32 +27,39 @@ export interface ConversationDataRedactor {
 class ConfigBasedRedactor implements ConversationDataRedactor {
   constructor(private redactionConfig: RedactionConfig) {}
 
-  redactMessage(message: IMessage, providerName: string): IMessage {
+  redactContent(content: Content, providerName: string): Content {
     if (!this.shouldRedact()) {
-      return message;
+      return content;
     }
 
-    const redactedMessage = { ...message };
+    const redactedContent = { ...content };
 
-    if (typeof redactedMessage.content === 'string') {
-      redactedMessage.content = this.redactContent(
-        redactedMessage.content,
-        providerName,
-      );
+    if (redactedContent.parts) {
+      redactedContent.parts = redactedContent.parts.map((part) => {
+        const redactedPart = { ...part };
+
+        // Redact text content
+        if (redactedPart.text) {
+          redactedPart.text = this.redactText(redactedPart.text, providerName);
+        }
+
+        // Redact function call arguments
+        if (redactedPart.functionCall?.args) {
+          const argsJson = JSON.stringify(redactedPart.functionCall.args);
+          const redactedArgsJson = this.redactText(argsJson, providerName);
+          try {
+            redactedPart.functionCall.args = JSON.parse(redactedArgsJson);
+          } catch {
+            // If parsing fails, keep original args
+            redactedPart.functionCall.args = part.functionCall!.args;
+          }
+        }
+
+        return redactedPart;
+      });
     }
 
-    // Redact tool_calls if present
-    if (redactedMessage.tool_calls) {
-      redactedMessage.tool_calls = redactedMessage.tool_calls.map((call) => ({
-        ...call,
-        function: {
-          ...call.function,
-          arguments: this.redactContent(call.function.arguments, providerName),
-        },
-      }));
-    }
-
-    return redactedMessage;
+    return redactedContent;
   }
 
   redactToolCall(tool: ITool): ITool {
@@ -62,7 +70,7 @@ class ConfigBasedRedactor implements ConversationDataRedactor {
     const redactedTool = { ...tool };
 
     if (redactedTool.function.parameters && tool.function.name) {
-      const redactedParams = this.redactContent(
+      const redactedParams = this.redactText(
         JSON.stringify(redactedTool.function.parameters),
         'global',
       );
@@ -82,7 +90,7 @@ class ConfigBasedRedactor implements ConversationDataRedactor {
       return content;
     }
 
-    return this.redactContent(content, providerName);
+    return this.redactText(content, providerName);
   }
 
   private shouldRedact(): boolean {
@@ -96,7 +104,7 @@ class ConfigBasedRedactor implements ConversationDataRedactor {
     );
   }
 
-  private redactContent(content: string, _providerName: string): string {
+  private redactText(content: string, _providerName: string): string {
     let redacted = content;
 
     // Apply basic API key redaction if enabled
@@ -210,21 +218,21 @@ export class LoggingProviderWrapper implements IProvider {
 
   // Only method that includes logging - everything else is passthrough
   async *generateChatCompletion(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     toolFormat?: string,
-  ): AsyncIterableIterator<unknown> {
+  ): AsyncIterableIterator<Content> {
     const promptId = this.generatePromptId();
     this.turnNumber++;
 
     // Log request if logging is enabled
     if (this.config.getConversationLoggingEnabled()) {
-      await this.logRequest(messages, tools, toolFormat, promptId);
+      await this.logRequest(contents, tools, toolFormat, promptId);
     }
 
     // Get stream from wrapped provider
     const stream = this.wrapped.generateChatCompletion(
-      messages,
+      contents,
       tools,
       toolFormat,
     );
@@ -240,26 +248,30 @@ export class LoggingProviderWrapper implements IProvider {
   }
 
   private async logRequest(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     toolFormat?: string,
     promptId?: string,
   ): Promise<void> {
     try {
-      // Apply redaction to messages and tools
-      const redactedMessages = messages.map((msg) =>
-        this.redactor.redactMessage(msg, this.wrapped.name),
+      // Apply redaction to contents and tools
+      const redactedContents = contents.map((content) =>
+        this.redactor.redactContent(content, this.wrapped.name),
       );
       const redactedTools = tools?.map((tool) =>
         this.redactor.redactToolCall(tool),
       );
+
+      // Convert contents to messages for telemetry compatibility
+      const legacyMessages =
+        this.convertContentsToLegacyMessages(redactedContents);
 
       const event = new ConversationRequestEvent(
         this.wrapped.name,
         this.conversationId,
         this.turnNumber,
         promptId || this.generatePromptId(),
-        redactedMessages,
+        legacyMessages,
         redactedTools,
         toolFormat,
       );
@@ -270,7 +282,7 @@ export class LoggingProviderWrapper implements IProvider {
       const fileWriter = getConversationFileWriter(
         this.config.getConversationLogPath(),
       );
-      fileWriter.writeRequest(this.wrapped.name, redactedMessages, {
+      fileWriter.writeRequest(this.wrapped.name, legacyMessages, {
         conversationId: this.conversationId,
         turnNumber: this.turnNumber,
         promptId: promptId || this.generatePromptId(),
@@ -284,9 +296,9 @@ export class LoggingProviderWrapper implements IProvider {
   }
 
   private async *logResponseStream(
-    stream: AsyncIterableIterator<unknown>,
+    stream: AsyncIterableIterator<Content>,
     promptId: string,
-  ): AsyncIterableIterator<unknown> {
+  ): AsyncIterableIterator<Content> {
     const startTime = performance.now();
     let responseContent = '';
     let responseComplete = false;
@@ -510,5 +522,76 @@ export class LoggingProviderWrapper implements IProvider {
 
   getModelParams?(): Record<string, unknown> | undefined {
     return this.wrapped.getModelParams?.();
+  }
+
+  // Legacy conversion method for telemetry compatibility
+  private convertContentsToLegacyMessages(contents: Content[]): Array<{
+    role: ContentGeneratorRole | 'system';
+    content: string;
+    tool_calls?: Array<{
+      id: string;
+      type: 'function';
+      function: { name: string; arguments: string };
+    }>;
+  }> {
+    const messages: Array<{
+      role: ContentGeneratorRole | 'system';
+      content: string;
+      tool_calls?: Array<{
+        id: string;
+        type: 'function';
+        function: { name: string; arguments: string };
+      }>;
+    }> = [];
+
+    for (const content of contents) {
+      if (content.role === 'system') {
+        // Handle system messages
+        const text = content.parts?.find((p) => p.text)?.text || '';
+        messages.push({
+          role: ContentGeneratorRole.SYSTEM,
+          content: text,
+        });
+      } else if (content.role === 'user') {
+        // Handle user messages
+        const text = content.parts?.find((p) => p.text)?.text || '';
+        messages.push({
+          role: ContentGeneratorRole.USER,
+          content: text,
+        });
+      } else if (content.role === 'model') {
+        // Handle model/assistant messages
+        const text = content.parts?.find((p) => p.text)?.text || '';
+        const functionCalls = content.parts?.filter((p) => p.functionCall);
+
+        const message: {
+          role: ContentGeneratorRole | 'system';
+          content: string;
+          tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            function: { name: string; arguments: string };
+          }>;
+        } = {
+          role: ContentGeneratorRole.ASSISTANT,
+          content: text,
+        };
+
+        if (functionCalls && functionCalls.length > 0) {
+          message.tool_calls = functionCalls.map((fc, index) => ({
+            id: `call_${Date.now()}_${index}`,
+            type: 'function' as const,
+            function: {
+              name: fc.functionCall!.name || 'unknown_function',
+              arguments: JSON.stringify(fc.functionCall!.args || {}),
+            },
+          }));
+        }
+
+        messages.push(message);
+      }
+    }
+
+    return messages;
   }
 }

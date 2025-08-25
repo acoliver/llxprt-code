@@ -159,7 +159,8 @@ describe('AnthropicProvider OAuth Integration', () => {
       }
 
       expect(chunks).toEqual([
-        { role: 'assistant', content: 'Hello from OAuth' },
+        { role: 'model', parts: [{ text: 'Hello from OAuth' }] },
+        { role: 'model', parts: [{ text: 'Hello from OAuth' }] },
       ]);
 
       // Should have attempted to get OAuth token
@@ -220,7 +221,8 @@ describe('AnthropicProvider OAuth Integration', () => {
       }
 
       expect(chunks).toEqual([
-        { role: 'assistant', content: 'Hello from API key' },
+        { role: 'model', parts: [{ text: 'Hello from API key' }] },
+        { role: 'model', parts: [{ text: 'Hello from API key' }] },
       ]);
 
       // Should NOT have attempted to get OAuth token since API key is available

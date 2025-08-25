@@ -52,10 +52,12 @@ export class ConversationDataRedactor {
     const redactedMessage = { ...message };
 
     // Content is always a string in IMessage
-    redactedMessage.content = this.redactContent(
-      redactedMessage.content,
-      providerName,
-    );
+    if (redactedMessage.content) {
+      redactedMessage.content = this.redactContent(
+        redactedMessage.content,
+        providerName,
+      );
+    }
 
     // Redact tool_calls if present
     if (redactedMessage.tool_calls) {

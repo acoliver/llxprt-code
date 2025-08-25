@@ -175,7 +175,7 @@ class MockConversationDataRedactor implements ConversationDataRedactor {
   redactMessage(message: IMessage, _provider: string): IMessage {
     return {
       ...message,
-      content: message.content.replace(
+      content: message.content?.replace(
         /sk-[a-zA-Z0-9]{48}/g,
         '[REDACTED-API-KEY]',
       ),

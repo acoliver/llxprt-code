@@ -1,29 +1,17 @@
 /**
+ * @license
  * Copyright 2025 Vybestack LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ContentGeneratorRole } from './ContentGeneratorRole.js';
-import { Part } from '@google/genai';
-
+/**
+ * Legacy IMessage interface - DEPRECATED
+ * This interface is maintained for backward compatibility during the transition to Content[].
+ * New code should use Content from @google/genai instead.
+ */
 export interface IMessage {
-  id?: string; // Unique identifier for the message, provided by the API
-  role: ContentGeneratorRole | 'system';
-  content: string;
-  parts?: Part[];
-  tool_call_id?: string;
-  tool_name?: string; // Added to track the function name for tool responses
+  role: string;
+  content?: string;
   tool_calls?: Array<{
     id: string;
     type: 'function';
@@ -32,9 +20,12 @@ export interface IMessage {
       arguments: string;
     };
   }>;
+  tool_call_id?: string;
+  name?: string;
+  id?: string;
   usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
   };
 }

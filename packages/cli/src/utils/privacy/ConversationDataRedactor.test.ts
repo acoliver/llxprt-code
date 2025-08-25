@@ -459,7 +459,7 @@ describe('Conversation Data Redaction', () => {
       role: ContentGeneratorRole.USER,
       content: 'Use API key sk-1234567890abcdef1234567890abcdef12345678',
       tool_call_id: 'call_456',
-      tool_name: 'api_call',
+      name: 'api_call',
       usage: {
         prompt_tokens: 50,
         completion_tokens: 30,
@@ -472,7 +472,7 @@ describe('Conversation Data Redaction', () => {
     expect(redacted.id).toBe('msg_123');
     expect(redacted.role).toBe(ContentGeneratorRole.USER);
     expect(redacted.tool_call_id).toBe('call_456');
-    expect(redacted.tool_name).toBe('api_call');
+    expect(redacted.name).toBe('api_call');
     expect(redacted.usage).toEqual({
       prompt_tokens: 50,
       completion_tokens: 30,

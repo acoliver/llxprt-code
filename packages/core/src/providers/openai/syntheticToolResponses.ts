@@ -127,55 +127,19 @@ export class SyntheticToolResponseHandler {
     const missingToolIds = this.identifyMissingToolResponses(messages);
     logger.debug(() => `Missing tool IDs: ${JSON.stringify(missingToolIds)}`);
 
-    // Always create a deep copy to avoid mutation issues with immutable objects
-    // This is critical for Cerebras/Qwen which may have JSONResponse objects
-    const deepCopyMessages: IMessage[] = messages.map((msg) => {
-      const copiedMsg: IMessage = {
-        role: msg.role,
-        content: msg.content,
-      };
-
-      // Copy optional properties if they exist
-      if (msg.tool_call_id !== undefined)
-        copiedMsg.tool_call_id = msg.tool_call_id;
-      if (msg.id !== undefined) copiedMsg.id = msg.id;
-      if (msg.usage !== undefined) copiedMsg.usage = { ...msg.usage };
-
-      // Deep copy tool_calls if they exist
-      if (msg.tool_calls) {
-        copiedMsg.tool_calls = msg.tool_calls.map((tc) => ({
-          id: tc.id,
-          type: tc.type,
-          function: {
-            name: tc.function.name,
-            arguments: tc.function.arguments,
-          },
-        }));
-      }
-
-      // Copy any additional properties that might exist (like _synthetic, _cancelled)
-      // These are added by our synthetic response handler
-      // Use Object.assign to preserve any extra properties without type errors
-      Object.assign(copiedMsg, {
-        ...('_synthetic' in msg
-          ? {
-              _synthetic: (msg as IMessage & { _synthetic?: boolean })
-                ._synthetic,
-            }
-          : {}),
-        ...('_cancelled' in msg
-          ? {
-              _cancelled: (msg as IMessage & { _cancelled?: boolean })
-                ._cancelled,
-            }
-          : {}),
-        ...('name' in msg
-          ? { name: (msg as IMessage & { name?: string }).name }
-          : {}),
-      });
-
-      return copiedMsg;
-    });
+    // Create a shallow copy with structured cloning for necessary fields
+    const deepCopyMessages: IMessage[] = messages.map((msg) => ({
+      ...msg,
+      // Ensure tool_calls are properly cloned if they exist
+      ...(msg.tool_calls && {
+        tool_calls: msg.tool_calls.map((tc) => ({
+          ...tc,
+          function: { ...tc.function },
+        })),
+      }),
+      // Ensure usage is cloned if it exists
+      ...(msg.usage && { usage: { ...msg.usage } }),
+    }));
 
     if (missingToolIds.length === 0) {
       return deepCopyMessages;

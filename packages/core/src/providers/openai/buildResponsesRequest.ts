@@ -254,12 +254,12 @@ export function buildResponsesRequest(
 
         // Sanitize content for safe API transmission
         let sanitizedContent = cleanMsg.content;
-        if (hasUnicodeReplacements(cleanMsg.content)) {
+        if (cleanMsg.content && hasUnicodeReplacements(cleanMsg.content)) {
           logger.debug(
             () =>
               'Message content contains Unicode replacement characters (U+FFFD), sanitizing...',
           );
-          sanitizedContent = ensureJsonSafe(cleanMsg.content);
+          sanitizedContent = ensureJsonSafe(cleanMsg.content || '');
         }
 
         return {

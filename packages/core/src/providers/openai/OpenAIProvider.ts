@@ -18,6 +18,11 @@
  * @plan PLAN-20250120-DEBUGLOGGING.P15
  * @requirement REQ-INT-001.1
  */
+/**
+ * @plan PLAN-20250113-SIMPLIFICATION.P07
+ * @requirement REQ-003.1
+ * @pseudocode lines 140-163
+ */
 import { DebugLogger } from '../../debug/index.js';
 import { IModel } from '../IModel.js';
 import { ITool } from '../ITool.js';
@@ -27,6 +32,7 @@ import { GemmaToolCallParser } from '../../parsers/TextToolCallParser.js';
 import { ToolFormatter } from '../../tools/ToolFormatter.js';
 import { ToolFormat } from '../../tools/IToolFormatter.js';
 import OpenAI from 'openai';
+import { randomBytes } from 'crypto';
 import { IProviderConfig } from '../types/IProviderConfig.js';
 import { RESPONSES_API_MODELS } from './RESPONSES_API_MODELS.js';
 import { ConversationCache } from './ConversationCache.js';
@@ -47,6 +53,8 @@ import {
 } from '../../config/endpoints.js';
 import { OAuthManager } from '../../auth/precedence.js';
 import { getSettingsService } from '../../settings/settingsServiceInstance.js';
+import { Content } from '@google/genai';
+import { OpenAIContentConverter } from '../converters/OpenAIContentConverter.js';
 
 export class OpenAIProvider extends BaseProvider {
   private logger: DebugLogger;
@@ -60,6 +68,12 @@ export class OpenAIProvider extends BaseProvider {
   private modelParams?: Record<string, unknown>;
   private _cachedClient?: OpenAI;
   private _cachedClientKey?: string;
+  private temporarySystemInstruction?: string;
+  /**
+   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   * @requirement REQ-003.1
+   */
+  private converter = new OpenAIContentConverter();
 
   constructor(
     apiKey: string | undefined,
@@ -239,6 +253,24 @@ export class OpenAIProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Transform a tool ID to OpenAI's expected format (call_ prefix)
+   */
+  private transformToolId(id: string): string {
+    if (!id) {
+      throw new Error('Tool ID is required and cannot be empty');
+    }
+
+    // If already has call_ prefix, return as-is
+    if (id.startsWith('call_')) {
+      return id;
+    }
+
+    // Replace any existing prefix with call_
+    const baseId = id.replace(/^(call_|toolu_)/, '');
+    return `call_${baseId}`;
+  }
+
   private requiresTextToolCallParsing(): boolean {
     if (this.providerConfig?.enableTextToolCallParsing === false) {
       return false;
@@ -369,12 +401,8 @@ export class OpenAIProvider extends BaseProvider {
       ? this.toolFormatter.toResponsesTool(tools)
       : undefined;
 
-    // Patch messages to include synthetic responses for cancelled tools
-    const { SyntheticToolResponseHandler } = await import(
-      './syntheticToolResponses.js'
-    );
-    const patchedMessages =
-      SyntheticToolResponseHandler.patchMessageHistory(messages);
+    // NO synthetic handling here - should be done in GeminiCompatibleWrapper
+    const patchedMessages = messages;
 
     // Build the request
     const request = buildResponsesRequest({
@@ -769,11 +797,42 @@ export class OpenAIProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Helper method to convert IMessage to Content and yield
+   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   */
+  private yieldAsContent(message: IMessage): Content {
+    return this.converter.fromProviderFormat(message);
+  }
+
+  /**
+   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   * @requirement REQ-003.1
+   * @pseudocode lines 140-163
+   */
   async *generateChatCompletion(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     _toolFormat?: string,
-  ): AsyncIterableIterator<IMessage> {
+  ): AsyncIterableIterator<Content> {
+    // If we have a temporary system instruction, prepend it as a system Content
+    let contentsToProcess = contents;
+    if (this.temporarySystemInstruction) {
+      const systemContent: Content = {
+        role: 'system',
+        parts: [{ text: this.temporarySystemInstruction }],
+      };
+      contentsToProcess = [systemContent, ...contents];
+      // Clear the temporary instruction after use
+      this.temporarySystemInstruction = undefined;
+    }
+
+    // Pseudocode line 149: Convert Content[] to OpenAI format
+    // Cast to IMessage[] since OpenAI converter returns OpenAIMessage[] which is compatible
+    const messages = this.converter.toProviderFormat(
+      contentsToProcess,
+    ) as IMessage[];
+
     // Check if API key is available (using resolved authentication)
     const apiKey = await this.getAuthToken();
     if (!apiKey) {
@@ -790,13 +849,22 @@ export class OpenAIProvider extends BaseProvider {
       const conversationId = undefined;
       const parentId = undefined;
 
-      yield* await this.callResponsesEndpoint(messages, tools, {
-        stream: true,
-        tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
-        stateful: false, // Always stateless for Phase 22-01
-        conversationId,
-        parentId,
-      });
+      // Convert response back to Content
+      for await (const message of await this.callResponsesEndpoint(
+        messages,
+        tools,
+        {
+          stream: true,
+          tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
+          stateful: false, // Always stateless for Phase 22-01
+          conversationId,
+          parentId,
+        },
+      )) {
+        // Pseudocode line 159-162: Stream responses
+        const content = this.converter.fromProviderFormat(message);
+        yield content;
+      }
       return;
     }
 
@@ -988,6 +1056,127 @@ export class OpenAIProvider extends BaseProvider {
 
       // Log the last few messages to understand what's being sent
       if (errorStatus === 400) {
+        // Dump full conversation history for debugging
+        this.logger.debug(
+          () => '=== OPENAI ERROR 400 - FULL CONVERSATION DUMP ===',
+        );
+        this.logger.debug(
+          () => `Total messages in conversation: ${contents.length}`,
+        );
+
+        // First log the original Content[] format
+        this.logger.debug(() => '--- Original Content[] Format ---');
+        contents.forEach((content, idx) => {
+          this.logger.debug(
+            () =>
+              `Message[${idx}]: role=${content.role}, parts=${content.parts?.length || 0}`,
+          );
+
+          content.parts?.forEach((part, partIdx) => {
+            if ('text' in part && part.text) {
+              const textLength = part.text.length;
+              const preview =
+                textLength > 100
+                  ? part.text.substring(0, 100) + '...'
+                  : part.text;
+              this.logger.debug(
+                () =>
+                  `  Part[${partIdx}]: text (${textLength} chars): "${preview}"`,
+              );
+            }
+            if ('functionCall' in part && part.functionCall) {
+              const funcCall = part.functionCall;
+              this.logger.debug(
+                () =>
+                  `  Part[${partIdx}]: functionCall\n` +
+                  `    id: ${funcCall.id}\n` +
+                  `    name: ${funcCall.name}\n` +
+                  `    args: ${JSON.stringify(funcCall.args).substring(0, 100)}...`,
+              );
+            }
+            if ('functionResponse' in part && part.functionResponse) {
+              const funcResponse = part.functionResponse;
+              const responseId = (funcResponse as { id?: string }).id;
+              this.logger.debug(
+                () =>
+                  `  Part[${partIdx}]: functionResponse\n` +
+                  `    id: ${responseId}\n` +
+                  `    name: ${funcResponse.name}\n` +
+                  `    response: ${JSON.stringify(funcResponse.response).substring(0, 100)}...`,
+              );
+            }
+          });
+        });
+
+        // Now log the converted OpenAI format
+        this.logger.debug(() => '--- Converted OpenAI Format ---');
+        cleanedMessages.forEach((msg, idx) => {
+          this.logger.debug(
+            () =>
+              `Message[${idx}]: role=${msg.role}` +
+              (msg.tool_call_id ? ` tool_call_id=${msg.tool_call_id}` : '') +
+              (msg.tool_calls ? ` tool_calls=${msg.tool_calls.length}` : ''),
+          );
+
+          if (msg.content) {
+            const preview =
+              typeof msg.content === 'string' && msg.content.length > 100
+                ? msg.content.substring(0, 100) + '...'
+                : msg.content;
+            this.logger.debug(() => `  content: ${preview}`);
+          }
+
+          if (msg.tool_calls) {
+            msg.tool_calls.forEach((tc, tcIdx) => {
+              this.logger.debug(
+                () =>
+                  `  tool_call[${tcIdx}]: id=${tc.id}, name=${tc.function.name}`,
+              );
+            });
+          }
+        });
+
+        // Analysis of tool call/response pairing
+        this.logger.debug(() => '--- Tool Call/Response Analysis ---');
+        const toolCallMap = new Map<
+          string,
+          { callIdx: number; responseIdx: number | null }
+        >();
+
+        cleanedMessages.forEach((msg, idx) => {
+          if (msg.role === 'assistant' && msg.tool_calls) {
+            msg.tool_calls.forEach((tc) => {
+              toolCallMap.set(tc.id, { callIdx: idx, responseIdx: null });
+            });
+          }
+          if (msg.role === 'tool' && msg.tool_call_id) {
+            const entry = toolCallMap.get(msg.tool_call_id);
+            if (entry) {
+              entry.responseIdx = idx;
+            } else {
+              this.logger.debug(
+                () =>
+                  `  WARNING: Tool response ${msg.tool_call_id} has no corresponding call!`,
+              );
+            }
+          }
+        });
+
+        // Report unpaired tool calls
+        toolCallMap.forEach((entry, id) => {
+          if (entry.responseIdx === null) {
+            this.logger.debug(
+              () =>
+                `  ERROR: Tool call ${id} at index ${entry.callIdx} has no response!`,
+            );
+          } else {
+            this.logger.debug(
+              () =>
+                `  OK: Tool call ${id} at index ${entry.callIdx} has response at index ${entry.responseIdx}`,
+            );
+          }
+        });
+
         // Log additional diagnostics for 400 errors
         const hasSyntheticMessages = cleanedMessages.some(
           (msg) =>
@@ -1030,6 +1219,8 @@ export class OpenAIProvider extends BaseProvider {
             });
           }
         });
+
+        this.logger.debug(() => '=== END OPENAI ERROR 400 DUMP ===');
       }
 
       // Check for JSONResponse mutation errors
@@ -1309,7 +1500,7 @@ export class OpenAIProvider extends BaseProvider {
           }
 
           // Yield the complete response
-          yield {
+          yield this.yieldAsContent({
             role: ContentGeneratorRole.ASSISTANT,
             content: fullContent || '',
             tool_calls:
@@ -1317,7 +1508,7 @@ export class OpenAIProvider extends BaseProvider {
                 ? accumulatedToolCalls
                 : undefined,
             usage: usageData,
-          };
+          });
           return;
         }
 
@@ -1368,9 +1559,16 @@ export class OpenAIProvider extends BaseProvider {
             contentParts.push(message.content);
           }
           if (message?.tool_calls) {
-            // Ensure tool_calls match the expected format
+            // Ensure tool_calls match the expected format - fast fail if missing ID
             aggregatedToolCalls = message.tool_calls.map((tc) => ({
-              id: tc.id || `call_${Date.now()}`,
+              id: tc.id
+                ? this.transformToolId(tc.id)
+                : (() => {
+                    // This should only happen for Gemini-originated calls
+                    // Generate in same format as turn.ts: toolname-timestamp-hash
+                    const baseId = `${tc.function?.name || 'unknown'}-${Date.now()}-${randomBytes(6).toString('hex')}`;
+                    return `call_${baseId}`;
+                  })(),
               type: (tc.type || 'function') as 'function',
               function: {
                 name: tc.function?.name || '',
@@ -1388,13 +1586,13 @@ export class OpenAIProvider extends BaseProvider {
         }
 
         // Yield single reconstructed message
-        yield {
+        yield this.yieldAsContent({
           role: ContentGeneratorRole.ASSISTANT,
           content: contentParts.join(''),
           tool_calls:
             aggregatedToolCalls.length > 0 ? aggregatedToolCalls : undefined,
           usage: finalUsageData,
-        };
+        });
         return;
       }
 
@@ -1494,10 +1692,10 @@ export class OpenAIProvider extends BaseProvider {
                   () =>
                     `Flushing pending whitespace (len=${pendingWhitespace?.length ?? 0}) before non-empty chunk`,
                 );
-                yield {
+                yield this.yieldAsContent({
                   role: ContentGeneratorRole.ASSISTANT,
                   content: pendingWhitespace,
-                };
+                });
                 hasStreamedContent = true;
                 fullContent += pendingWhitespace;
                 pendingWhitespace = null;
@@ -1513,10 +1711,10 @@ export class OpenAIProvider extends BaseProvider {
               },
             );
 
-            yield {
+            yield this.yieldAsContent({
               role: ContentGeneratorRole.ASSISTANT,
               content: delta.content,
-            };
+            });
             hasStreamedContent = true;
           }
 
@@ -1576,10 +1774,10 @@ export class OpenAIProvider extends BaseProvider {
 
       // For non-streaming, we yield the full content at once if there's no parser
       if (!parser && fullContent) {
-        yield {
+        yield this.yieldAsContent({
           role: ContentGeneratorRole.ASSISTANT,
           content: fullContent,
-        };
+        });
         hasStreamedContent = true;
       }
     }
@@ -1590,10 +1788,10 @@ export class OpenAIProvider extends BaseProvider {
         () =>
           `Flushing trailing pending whitespace (len=${pendingWhitespace?.length ?? 0}) at stream end`,
       );
-      yield {
+      yield this.yieldAsContent({
         role: ContentGeneratorRole.ASSISTANT,
         content: pendingWhitespace,
-      };
+      });
       hasStreamedContent = true;
       fullContent += pendingWhitespace;
       pendingWhitespace = null;
@@ -1604,9 +1802,11 @@ export class OpenAIProvider extends BaseProvider {
       const { cleanedContent, toolCalls } = parser.parse(fullContent);
 
       if (toolCalls.length > 0) {
-        // Convert to standard format
+        // Convert to standard format - use existing ID or generate for text-parsed tools
         const standardToolCalls = toolCalls.map((tc, index) => ({
-          id: `call_${Date.now()}_${index}`,
+          id: (tc as { id?: string }).id
+            ? this.transformToolId((tc as { id?: string }).id!)
+            : `call_${Date.now()}_${index}`,
           type: 'function' as const,
           function: {
             name: tc.name,
@@ -1614,19 +1814,19 @@ export class OpenAIProvider extends BaseProvider {
           },
         }));
 
-        yield {
+        yield this.yieldAsContent({
           role: ContentGeneratorRole.ASSISTANT,
           content: cleanedContent,
           tool_calls: standardToolCalls,
           usage: usageData,
-        };
+        });
       } else {
         // No tool calls found, yield cleaned content
-        yield {
+        yield this.yieldAsContent({
           role: ContentGeneratorRole.ASSISTANT,
           content: cleanedContent,
           usage: usageData,
-        };
+        });
       }
     } else {
       // Standard OpenAI tool call handling
@@ -1818,12 +2018,12 @@ export class OpenAIProvider extends BaseProvider {
 
         if (shouldOmitContent) {
           // Qwen: Send just a space (like Cerebras) to prevent stream stopping
-          yield {
+          yield this.yieldAsContent({
             role: ContentGeneratorRole.ASSISTANT,
             content: ' ', // Single space instead of empty to keep stream alive
             tool_calls: fixedToolCalls,
             usage: usageData,
-          };
+          });
         } else if (isCerebras && hasStreamedContent) {
           // Cerebras: Send just a space to prevent duplication but allow continuation
           // This prevents the repeated "Let me search..." text
@@ -1831,28 +2031,28 @@ export class OpenAIProvider extends BaseProvider {
             () =>
               '[Cerebras] Sending minimal space content to prevent duplication',
           );
-          yield {
+          yield this.yieldAsContent({
             role: ContentGeneratorRole.ASSISTANT,
             content: ' ', // Single space instead of full content
             tool_calls: fixedToolCalls,
             usage: usageData,
-          };
+          });
         } else {
           // Include full content with tool calls
-          yield {
+          yield this.yieldAsContent({
             role: ContentGeneratorRole.ASSISTANT,
             content: fullContent || '',
             tool_calls: fixedToolCalls,
             usage: usageData,
-          };
+          });
         }
       } else if (usageData) {
         // Always emit usage data so downstream consumers can update stats
-        yield {
+        yield this.yieldAsContent({
           role: ContentGeneratorRole.ASSISTANT,
           content: '',
           usage: usageData,
-        };
+        });
       }
     }
   }
@@ -2056,6 +2256,15 @@ export class OpenAIProvider extends BaseProvider {
    */
   override getModelParams(): Record<string, unknown> | undefined {
     return this.modelParams;
+  }
+
+  /**
+   * Set temporary system instruction for the next generateChatCompletion call
+   */
+  override setTemporarySystemInstruction(
+    systemInstruction: string | undefined,
+  ): void {
+    this.temporarySystemInstruction = systemInstruction;
   }
 
   /**

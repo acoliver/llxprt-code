@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
+import { Content } from '@google/genai';
 import { IModel } from './IModel.js';
 import { ITool } from './ITool.js';
-import { IMessage } from './IMessage.js';
 
 export interface IProvider {
   name: string;
   isDefault?: boolean;
   getModels(): Promise<IModel[]>;
   generateChatCompletion(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     toolFormat?: string,
-  ): AsyncIterableIterator<unknown>;
+  ): AsyncIterableIterator<Content>;
   setModel?(modelId: string): void;
   getCurrentModel?(): string;
   getDefaultModel(): string;
@@ -60,7 +60,13 @@ export interface IProvider {
    * @returns Current parameters or undefined if not set
    */
   getModelParams?(): Record<string, unknown> | undefined;
+
+  /**
+   * Set temporary system instruction for the next generateChatCompletion call
+   * @param systemInstruction The system instruction to use, or undefined to clear
+   */
+  setTemporarySystemInstruction?(systemInstruction: string | undefined): void;
 }
 
 // Re-export the interfaces for convenience
-export type { IModel, ITool, IMessage };
+export type { Content, IModel, ITool };

@@ -138,10 +138,10 @@ export type {
 } from './providers/types.js';
 // Export the actual interfaces too
 export * from './providers/IProvider.js';
-export * from './providers/IMessage.js';
 export * from './providers/ITool.js';
 export * from './providers/IModel.js';
 export * from './providers/IProviderManager.js';
+export * from './providers/IMessage.js';
 export * from './providers/ContentGeneratorRole.js';
 export * from './providers/ProviderContentGenerator.js';
 export * from './providers/ProviderManager.js';
@@ -155,6 +155,11 @@ export { GeminiProvider } from './providers/gemini/GeminiProvider.js';
 export * from './providers/ProviderManager.js';
 export * from './providers/adapters/GeminiCompatibleWrapper.js';
 export * from './providers/errors.js';
+
+// Export content converters
+export { OpenAIContentConverter } from './providers/converters/OpenAIContentConverter.js';
+export { AnthropicContentConverter } from './providers/converters/AnthropicContentConverter.js';
+export type { IContentConverter } from './providers/converters/IContentConverter.js';
 
 // Export tokenizers
 export * from './providers/tokenizers/ITokenizer.js';

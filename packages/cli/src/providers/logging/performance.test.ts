@@ -154,14 +154,14 @@ class MockConversationDataRedactor implements ConversationDataRedactor {
 
     if (!redactedContent) {
       // Simulate redaction work
-      redactedContent = message.content.replace(
+      redactedContent = message.content?.replace(
         /sk-[a-zA-Z0-9]{48}/g,
         '[REDACTED-API-KEY]',
       );
-      this.redactionCache.set(cacheKey, redactedContent);
+      this.redactionCache.set(cacheKey, redactedContent || '');
     }
 
-    return { ...message, content: redactedContent };
+    return { ...message, content: redactedContent || '' };
   }
 
   redactConversation(messages: IMessage[], provider: string): IMessage[] {

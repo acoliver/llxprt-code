@@ -21,7 +21,7 @@ import {
   ResponsesTool,
 } from './IToolFormatter.js';
 import { ITool } from '../providers/ITool.js';
-import { IMessage } from '../providers/IMessage.js';
+import { FunctionCall } from '@google/genai';
 import { DebugLogger } from '../debug/DebugLogger.js';
 
 export class ToolFormatter implements IToolFormatter {
@@ -171,10 +171,7 @@ export class ToolFormatter implements IToolFormatter {
     }
   }
 
-  fromProviderFormat(
-    rawToolCall: unknown,
-    format: ToolFormat,
-  ): IMessage['tool_calls'] {
+  fromProviderFormat(rawToolCall: unknown, format: ToolFormat): FunctionCall[] {
     switch (format) {
       case 'openai':
       case 'deepseek':
@@ -246,14 +243,23 @@ export class ToolFormatter implements IToolFormatter {
           }
         }
 
+        // Parse the arguments to get the actual object
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(openAiToolCall.function.arguments);
+        } catch (e) {
+          this.logger.error(
+            () =>
+              `Failed to parse tool call arguments for ${openAiToolCall.function.name}:`,
+            e,
+          );
+        }
+
         return [
           {
             id: openAiToolCall.id,
-            type: 'function' as const,
-            function: {
-              name: openAiToolCall.function.name,
-              arguments: openAiToolCall.function.arguments,
-            },
+            name: openAiToolCall.function.name,
+            args,
           },
         ];
       }
@@ -276,13 +282,8 @@ export class ToolFormatter implements IToolFormatter {
         return [
           {
             id: anthropicToolCall.id,
-            type: 'function' as const,
-            function: {
-              name: anthropicToolCall.name,
-              arguments: anthropicToolCall.input
-                ? JSON.stringify(anthropicToolCall.input)
-                : '',
-            },
+            name: anthropicToolCall.name,
+            args: (anthropicToolCall.input as Record<string, unknown>) || {},
           },
         ];
       }
@@ -300,11 +301,8 @@ export class ToolFormatter implements IToolFormatter {
         return [
           {
             id: `hermes_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-            type: 'function' as const,
-            function: {
-              name: hermesToolCall.name,
-              arguments: JSON.stringify(hermesToolCall.arguments || {}),
-            },
+            name: hermesToolCall.name,
+            args: hermesToolCall.arguments || {},
           },
         ];
       }
@@ -322,11 +320,8 @@ export class ToolFormatter implements IToolFormatter {
         return [
           {
             id: `xml_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-            type: 'function' as const,
-            function: {
-              name: xmlToolCall.name,
-              arguments: JSON.stringify(xmlToolCall.arguments || {}),
-            },
+            name: xmlToolCall.name,
+            args: xmlToolCall.arguments || {},
           },
         ];
       }
@@ -349,7 +344,11 @@ export class ToolFormatter implements IToolFormatter {
         arguments?: string;
       };
     },
-    accumulatedToolCalls: NonNullable<IMessage['tool_calls']>,
+    accumulatedToolCalls: Array<{
+      id: string;
+      type: 'function';
+      function: { name: string; arguments: string };
+    }>,
     format: ToolFormat,
   ): void {
     switch (format) {

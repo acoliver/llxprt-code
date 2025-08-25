@@ -11,7 +11,7 @@
 import { IProvider } from './IProvider.js';
 import { IModel } from './IModel.js';
 import { ITool } from './ITool.js';
-import { IMessage } from './IMessage.js';
+import { Content } from '@google/genai';
 import {
   AuthPrecedenceResolver,
   AuthPrecedenceConfig,
@@ -250,10 +250,10 @@ export abstract class BaseProvider implements IProvider {
   abstract getModels(): Promise<IModel[]>;
   abstract getDefaultModel(): string;
   abstract generateChatCompletion(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     toolFormat?: string,
-  ): AsyncIterableIterator<unknown>;
+  ): AsyncIterableIterator<Content>;
 
   // Optional methods with default implementations
   setModel?(_modelId: string): void {}
@@ -271,6 +271,9 @@ export abstract class BaseProvider implements IProvider {
     this.clearAuthCache();
   }
   setConfig?(_config: unknown): void {}
+  setTemporarySystemInstruction?(
+    _systemInstruction: string | undefined,
+  ): void {}
   getServerTools(): string[] {
     return [];
   }

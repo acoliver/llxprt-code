@@ -1,10 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ClientOptions } from '@anthropic-ai/sdk';
 import type { Stream } from '@anthropic-ai/sdk/streaming';
+import { Content } from '@google/genai';
 import { DebugLogger } from '../../debug/index.js';
 import { IModel } from '../IModel.js';
 import { ITool } from '../ITool.js';
-import { IMessage } from '../IMessage.js';
 import { retryWithBackoff } from '../../utils/retry.js';
 import { ToolFormatter } from '../../tools/ToolFormatter.js';
 import type { ToolFormat } from '../../tools/IToolFormatter.js';
@@ -12,17 +12,19 @@ import { IProviderConfig } from '../types/IProviderConfig.js';
 import { BaseProvider, BaseProviderConfig } from '../BaseProvider.js';
 import { OAuthManager } from '../../auth/precedence.js';
 import { getSettingsService } from '../../settings/settingsServiceInstance.js';
-import { ContentGeneratorRole } from '../ContentGeneratorRole.js';
+import { AnthropicContentConverter } from '../converters/AnthropicContentConverter.js';
 
 export class AnthropicProvider extends BaseProvider {
   private logger: DebugLogger;
   private anthropic: Anthropic;
   private toolFormatter: ToolFormatter;
+  private converter = new AnthropicContentConverter();
   toolFormat: ToolFormat = 'anthropic';
   private baseURL?: string;
   private _config?: IProviderConfig;
   private currentModel: string = 'claude-sonnet-4-20250514'; // Default model
   private modelParams?: Record<string, unknown>;
+  private temporarySystemInstruction?: string;
 
   // Model cache for latest resolution
   private modelCache: { models: IModel[]; timestamp: number } | null = null;
@@ -130,6 +132,24 @@ export class AnthropicProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Transform a tool ID to Anthropic's expected format (toolu_ prefix)
+   */
+  private transformToolId(id: string): string {
+    if (!id) {
+      throw new Error('Tool ID is required and cannot be empty');
+    }
+
+    // If already has toolu_ prefix, return as-is
+    if (id.startsWith('toolu_')) {
+      return id;
+    }
+
+    // Replace any existing prefix with toolu_
+    const baseId = id.replace(/^(call_|toolu_)/, '');
+    return `toolu_${baseId}`;
+  }
+
   override async getModels(): Promise<IModel[]> {
     const authToken = await this.getAuthToken();
     if (!authToken) {
@@ -212,10 +232,10 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   async *generateChatCompletion(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     _toolFormat?: string,
-  ): AsyncIterableIterator<unknown> {
+  ): AsyncIterableIterator<Content> {
     const authToken = await this.getAuthToken();
     if (!authToken) {
       throw new Error(
@@ -235,9 +255,9 @@ export class AnthropicProvider extends BaseProvider {
       // Resolve model if it uses -latest alias
       const resolvedModel = await this.resolveLatestModel(this.currentModel);
 
-      // Always validate and fix message history to prevent tool_use/tool_result mismatches
-      // This is necessary for both cancelled tools and retries
-      const validatedMessages = this.validateAndFixMessages(messages);
+      // Convert Content[] to Anthropic format using existing logic
+      const anthropicMessages =
+        this.convertContentsToAnthropicMessages(contents);
 
       // Use the resolved model for the API call
       const modelForApi = resolvedModel;
@@ -246,80 +266,22 @@ export class AnthropicProvider extends BaseProvider {
       const authToken = await this.getAuthToken();
       const isOAuth = authToken && authToken.startsWith('sk-ant-oat');
 
-      // Extract system message if present and handle tool responses
-      let systemMessage: string | undefined;
-      let llxprtPrompts: string | undefined; // Store llxprt prompts separately
-      const anthropicMessages: Array<{
-        role: 'user' | 'assistant';
-        content:
-          | string
-          | Array<
-              | { type: 'text'; text: string }
-              | { type: 'tool_use'; id: string; name: string; input: unknown }
-              | { type: 'tool_result'; tool_use_id: string; content: string }
-            >;
-      }> = [];
+      // Use the converted messages
+      let systemMessage = this.extractSystemMessage(contents);
 
-      for (const msg of validatedMessages) {
-        if (msg.role === 'system') {
-          if (isOAuth) {
-            // In OAuth mode, save system content for injection as user message
-            llxprtPrompts = msg.content;
-          } else {
-            // In normal mode, use as system message
-            systemMessage = msg.content;
-          }
-        } else if (msg.role === 'tool') {
-          // Anthropic expects tool responses as user messages with tool_result content
-          anthropicMessages.push({
-            role: 'user',
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: msg.tool_call_id || 'unknown',
-                content: msg.content,
-              },
-            ],
-          });
-        } else if (msg.role === 'assistant' && msg.tool_calls) {
-          // Handle assistant messages with tool calls
-          const content: Array<
-            | { type: 'text'; text: string }
-            | { type: 'tool_use'; id: string; name: string; input: unknown }
-          > = [];
-
-          if (msg.content) {
-            content.push({ type: 'text', text: msg.content });
-          }
-
-          for (const toolCall of msg.tool_calls) {
-            content.push({
-              type: 'tool_use',
-              id: toolCall.id,
-              name: toolCall.function.name,
-              input: toolCall.function.arguments
-                ? JSON.parse(toolCall.function.arguments)
-                : {},
-            });
-          }
-
-          anthropicMessages.push({
-            role: 'assistant',
-            content,
-          });
-        } else {
-          // Regular user/assistant messages
-          anthropicMessages.push({
-            role: msg.role as 'user' | 'assistant',
-            content: msg.content,
-          });
-        }
+      // If we have a temporary system instruction from GeminiCompatibleWrapper, use it
+      if (this.temporarySystemInstruction) {
+        systemMessage = systemMessage
+          ? systemMessage + '\n\n' + this.temporarySystemInstruction
+          : this.temporarySystemInstruction;
+        // Clear the temporary instruction after use
+        this.temporarySystemInstruction = undefined;
       }
 
-      // In OAuth mode, inject llxprt prompts as conversation content
-      // ONLY for the very first message in a new conversation
-      if (isOAuth && llxprtPrompts && anthropicMessages.length === 0) {
-        // This is the very first message - inject the context
+      let finalMessages = anthropicMessages;
+
+      if (isOAuth && systemMessage && anthropicMessages.length === 0) {
+        // In OAuth mode, inject system prompts as conversation content for first message
         const contextMessage = `Important context for using llxprt tools:
 
 Tool Parameter Reference:
@@ -331,23 +293,21 @@ Tool Parameter Reference:
 - todo_write requires 'todos' array with {id, content, status, priority}
 - All file paths must be absolute (starting with /)
 
-${llxprtPrompts}`;
+${systemMessage}`;
 
-        // Inject at the beginning of the conversation
-        anthropicMessages.unshift(
+        finalMessages = [
           {
-            role: 'user',
+            role: 'user' as const,
             content: contextMessage,
           },
           {
-            role: 'assistant',
+            role: 'assistant' as const,
             content:
               "I understand the llxprt tool parameters and context. I'll use the correct parameter names for each tool. Ready to help with your tasks.",
           },
-        );
+          ...anthropicMessages,
+        ];
       }
-      // For ongoing conversations, the context was already injected in the first message
-      // so we don't need to inject it again
 
       // Convert ITool[] to Anthropic's tool format if tools are provided
       const anthropicTools = tools
@@ -359,7 +319,7 @@ ${llxprtPrompts}`;
         typeof this.anthropic.messages.create
       >[0] = {
         model: modelForApi,
-        messages: anthropicMessages,
+        messages: finalMessages,
         max_tokens: this.getMaxTokensForModel(resolvedModel),
         ...this.modelParams, // Apply model params first
         stream: streamingEnabled, // Use ephemeral streaming setting
@@ -401,197 +361,140 @@ ${llxprtPrompts}`;
       if (streamingEnabled) {
         // Handle streaming response
         const stream = response as Stream<Anthropic.MessageStreamEvent>;
-        let currentUsage:
-          | { input_tokens: number; output_tokens: number }
-          | undefined;
-        // Track current tool call being streamed
-        let currentToolCall:
-          | { id: string; name: string; input: string }
-          | undefined;
 
-        // Process the stream
+        // Collect all chunks to build complete response
+        const chunks: Anthropic.MessageStreamEvent[] = [];
         for await (const chunk of stream) {
-          this.logger.debug(
-            () =>
-              `Received chunk type: ${chunk.type}${
-                chunk.type === 'message_start'
-                  ? ` - ${JSON.stringify(chunk, null, 2)}`
-                  : ''
-              }`,
-          );
-          if (chunk.type === 'message_start') {
-            // Initial usage info
-            this.logger.debug(
-              () => `message_start chunk: ${JSON.stringify(chunk, null, 2)}`,
-            );
-            if (chunk.message?.usage) {
-              const usage = chunk.message.usage;
-              // Don't require both fields - Anthropic might send them separately
-              currentUsage = {
-                input_tokens: usage.input_tokens ?? 0,
-                output_tokens: usage.output_tokens ?? 0,
-              };
-              this.logger.debug(
-                () =>
-                  `Set currentUsage from message_start: ${JSON.stringify(currentUsage)}`,
-              );
-              yield {
-                role: 'assistant',
-                content: '',
-                usage: {
-                  prompt_tokens: currentUsage.input_tokens,
-                  completion_tokens: currentUsage.output_tokens,
-                  total_tokens:
-                    currentUsage.input_tokens + currentUsage.output_tokens,
-                },
-              } as IMessage;
-            }
-          } else if (chunk.type === 'content_block_start') {
-            // Handle tool use blocks
-            if (chunk.content_block.type === 'tool_use') {
-              currentToolCall = {
-                id: chunk.content_block.id,
-                name: chunk.content_block.name,
-                input: '',
-              };
-            }
-          } else if (chunk.type === 'content_block_delta') {
-            // Yield content chunks
-            if (chunk.delta.type === 'text_delta') {
-              yield {
-                role: 'assistant',
-                content: chunk.delta.text,
-              } as IMessage;
-            } else if (
-              chunk.delta.type === 'input_json_delta' &&
-              currentToolCall
-            ) {
-              // Handle input deltas for tool calls
-              currentToolCall.input += chunk.delta.partial_json;
-            }
-          } else if (chunk.type === 'content_block_stop') {
-            // Complete the tool call
-            if (currentToolCall) {
-              const toolCallResult = this.toolFormatter.fromProviderFormat(
-                {
-                  id: currentToolCall.id,
-                  type: 'tool_use',
-                  name: currentToolCall.name,
-                  input: currentToolCall.input
-                    ? JSON.parse(currentToolCall.input)
-                    : undefined,
-                },
-                'anthropic',
-              );
-              yield {
-                role: 'assistant',
-                content: '',
-                tool_calls: toolCallResult,
-              } as IMessage;
-              currentToolCall = undefined;
-            }
-          } else if (chunk.type === 'message_delta') {
-            // Update usage if provided
-            if (chunk.usage) {
-              this.logger.debug(
-                () =>
-                  `message_delta usage: ${JSON.stringify(chunk.usage, null, 2)}`,
-              );
-            }
-            if (chunk.usage) {
-              // Anthropic may send partial usage data - merge with existing
-              currentUsage = {
-                input_tokens:
-                  chunk.usage.input_tokens ?? currentUsage?.input_tokens ?? 0,
-                output_tokens:
-                  chunk.usage.output_tokens ?? currentUsage?.output_tokens ?? 0,
-              };
-              this.logger.debug(
-                () =>
-                  `Updated currentUsage from message_delta: ${JSON.stringify(currentUsage)}`,
-              );
-              yield {
-                role: 'assistant',
-                content: '',
-                usage: {
-                  prompt_tokens: currentUsage.input_tokens,
-                  completion_tokens: currentUsage.output_tokens,
-                  total_tokens:
-                    currentUsage.input_tokens + currentUsage.output_tokens,
-                },
-              } as IMessage;
-            }
-          } else if (chunk.type === 'message_stop') {
-            // Final usage info
-            if (currentUsage) {
-              this.logger.debug(
-                () => `Yielding final usage: ${JSON.stringify(currentUsage)}`,
-              );
-              yield {
-                role: 'assistant',
-                content: '',
-                usage: {
-                  prompt_tokens: currentUsage.input_tokens,
-                  completion_tokens: currentUsage.output_tokens,
-                  total_tokens:
-                    currentUsage.input_tokens + currentUsage.output_tokens,
-                },
-              } as IMessage;
-            } else {
-              this.logger.debug(() => 'No currentUsage data at message_stop');
-            }
+          chunks.push(chunk);
+
+          // Yield text chunks as they arrive
+          if (
+            chunk.type === 'content_block_delta' &&
+            chunk.delta.type === 'text_delta'
+          ) {
+            yield {
+              role: 'model',
+              parts: [{ text: chunk.delta.text }],
+            } as Content;
           }
+        }
+
+        // Build complete response from collected chunks
+        const completeResponse = this.buildCompleteResponse(chunks);
+        if (completeResponse) {
+          const convertedResponse =
+            this.converter.fromProviderFormat(completeResponse);
+          yield convertedResponse;
         }
       } else {
         // Handle non-streaming response
         const message = response as Anthropic.Message;
-        let fullContent = '';
-        const toolCalls: Array<{
-          id: string;
-          type: 'function';
-          function: { name: string; arguments: string };
-        }> = [];
-
-        // Process content blocks
-        for (const content of message.content) {
-          if (content.type === 'text') {
-            fullContent += content.text;
-          } else if (content.type === 'tool_use') {
-            toolCalls.push({
-              id: content.id,
-              type: 'function',
-              function: {
-                name: content.name,
-                arguments: JSON.stringify(content.input),
-              },
-            });
-          }
-        }
-
-        // Build response message
-        const responseMessage: IMessage = {
-          role: ContentGeneratorRole.ASSISTANT,
-          content: fullContent,
-        };
-
-        if (toolCalls.length > 0) {
-          responseMessage.tool_calls = toolCalls;
-        }
-
-        if (message.usage) {
-          responseMessage.usage = {
-            prompt_tokens: message.usage.input_tokens,
-            completion_tokens: message.usage.output_tokens,
-            total_tokens:
-              message.usage.input_tokens + message.usage.output_tokens,
-          };
-        }
-
-        yield responseMessage;
+        const convertedResponse = this.converter.fromProviderFormat(message);
+        yield convertedResponse;
       }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
+
+      // Check if it's a 400 error (bad request)
+      const is400Error =
+        errorMessage.includes('400') ||
+        errorMessage.includes('tool_use') ||
+        errorMessage.includes('tool_result');
+
+      // Dump conversation history on error for debugging
+      // Use error level for 400 errors to ensure it's always logged
+      // Bind the context to preserve 'this' in the logger methods
+      const logFn = is400Error
+        ? this.logger.error.bind(this.logger)
+        : this.logger.debug.bind(this.logger);
+
+      logFn(() => '=== ANTHROPIC ERROR - CONVERSATION DUMP ===');
+      logFn(() => `Error: ${errorMessage}`);
+      logFn(() => `Total messages in conversation: ${contents.length}`);
+
+      // Log each message in detail
+      contents.forEach((content, idx) => {
+        logFn(() => `\n--- Message ${idx} ---`);
+        logFn(() => `Role: ${content.role}`);
+
+        if (content.parts) {
+          content.parts.forEach((part, partIdx) => {
+            if (part.text) {
+              const textLength = part.text.length;
+              logFn(() => `  Part[${partIdx}]: text (${textLength} chars)`);
+            }
+            if ('functionCall' in part && part.functionCall) {
+              const funcCall = part.functionCall;
+              logFn(
+                () =>
+                  `  Part[${partIdx}]: functionCall\n` +
+                  `    id: ${funcCall.id}\n` +
+                  `    name: ${funcCall.name}\n` +
+                  `    args: ${JSON.stringify(funcCall.args)}`,
+              );
+            }
+            if ('functionResponse' in part && part.functionResponse) {
+              const funcResponse = part.functionResponse;
+              const response = funcResponse.response;
+              const errorResponse = response as { error?: string };
+              const isError =
+                response && typeof errorResponse.error === 'string';
+              const isCancelled =
+                isError &&
+                errorResponse.error?.includes('[Operation Cancelled]');
+              const responseId = (funcResponse as { id?: string }).id;
+              logFn(
+                () =>
+                  `  Part[${partIdx}]: functionResponse\n` +
+                  `    id: ${responseId}\n` +
+                  `    name: ${funcResponse.name}\n` +
+                  `    isError: ${isError}\n` +
+                  `    isCancelled: ${isCancelled}\n` +
+                  `    response: ${JSON.stringify(response).substring(0, 200)}`,
+              );
+            }
+          });
+        }
+      });
+
+      // Also dump the converted Anthropic messages
+      logFn(() => '\n=== CONVERTED ANTHROPIC MESSAGES ===');
+      try {
+        const anthropicMessages =
+          this.convertContentsToAnthropicMessages(contents);
+        logFn(
+          () => `Converted to ${anthropicMessages.length} Anthropic messages`,
+        );
+        anthropicMessages.forEach((msg, idx) => {
+          logFn(() => `Message[${idx}]: role=${msg.role}`);
+          if (Array.isArray(msg.content)) {
+            msg.content.forEach((block, blockIdx) => {
+              if (block.type === 'tool_use') {
+                logFn(
+                  () =>
+                    `  Block[${blockIdx}]: tool_use id=${block.id} name=${block.name}`,
+                );
+              } else if (block.type === 'tool_result') {
+                logFn(
+                  () =>
+                    `  Block[${blockIdx}]: tool_result tool_use_id=${block.tool_use_id}`,
+                );
+              } else if (block.type === 'text') {
+                logFn(
+                  () =>
+                    `  Block[${blockIdx}]: text (${block.text.length} chars)`,
+                );
+              }
+            });
+          }
+        });
+      } catch (conversionError) {
+        logFn(() => `Failed to convert for logging: ${conversionError}`);
+      }
+
+      logFn(() => '=== END CONVERSATION DUMP ===\n');
+
       throw new Error(`Anthropic API error: ${errorMessage}`);
     }
   }
@@ -818,66 +721,366 @@ ${llxprtPrompts}`;
   }
 
   /**
-   * Validates and potentially fixes the message history to ensure proper tool_use/tool_result pairing.
-   * This prevents the "tool_use ids were found without tool_result blocks" error after a failed request.
+   * Extract system message from Content[] array
    */
-  private validateAndFixMessages(messages: IMessage[]): IMessage[] {
-    const fixedMessages: IMessage[] = [];
-    let pendingToolCalls: Array<{ id: string; name: string }> = [];
+  private extractSystemMessage(contents: Content[]): string | undefined {
+    const systemContent = contents.find((c) => c.role === 'system');
+    if (systemContent && systemContent.parts) {
+      return systemContent.parts
+        .filter((p) => p.text)
+        .map((p) => p.text)
+        .join('\n');
+    }
+    return undefined;
+  }
 
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
+  /**
+   * Convert Content[] to Anthropic MessageParam format
+   * Automatically fixes tool_use/tool_result mismatches
+   */
+  private convertContentsToAnthropicMessages(contents: Content[]): Array<{
+    role: 'user' | 'assistant';
+    content:
+      | string
+      | Array<
+          | { type: 'text'; text: string }
+          | { type: 'tool_use'; id: string; name: string; input: unknown }
+          | { type: 'tool_result'; tool_use_id: string; content: string }
+        >;
+  }> {
+    this.logger.debug(
+      () =>
+        `[convertContentsToAnthropicMessages] Converting ${contents.length} content items`,
+    );
 
-      if (msg.role === 'assistant' && msg.tool_calls) {
-        // Track tool calls from assistant
-        fixedMessages.push(msg);
-        pendingToolCalls = msg.tool_calls.map((tc) => ({
-          id: tc.id,
-          name: tc.function.name,
-        }));
-      } else if (msg.role === 'tool' && pendingToolCalls.length > 0) {
-        // Match tool results with pending tool calls
-        fixedMessages.push(msg);
-        // Remove the matched tool call
-        pendingToolCalls = pendingToolCalls.filter(
-          (tc) => tc.id !== msg.tool_call_id,
-        );
-      } else if (
-        msg.role === 'assistant' ||
-        msg.role === 'user' ||
-        msg.role === 'system'
-      ) {
-        // If we have pending tool calls and encounter a non-tool message,
-        // we need to add dummy tool results to maintain consistency
-        if (pendingToolCalls.length > 0 && msg.role !== 'system') {
-          // Add dummy tool results for unmatched tool calls
-          for (const toolCall of pendingToolCalls) {
-            fixedMessages.push({
-              role: 'tool' as const,
-              tool_call_id: toolCall.id,
-              content: 'Error: Tool execution was interrupted. Please retry.',
-            } as IMessage);
-          }
-          pendingToolCalls = [];
+    // Log the structure of contents for debugging
+    contents.forEach((content, idx) => {
+      const hasFunctionCall = content.parts?.some((p) => 'functionCall' in p);
+      const hasFunctionResponse = content.parts?.some(
+        (p) => 'functionResponse' in p,
+      );
+      this.logger.debug(
+        () =>
+          `  Content[${idx}]: role=${content.role}, hasFunctionCall=${hasFunctionCall}, hasFunctionResponse=${hasFunctionResponse}`,
+      );
+
+      // Log details of function calls and responses
+      content.parts?.forEach((part, partIdx) => {
+        if ('functionCall' in part && part.functionCall) {
+          this.logger.debug(
+            () =>
+              `    Part[${partIdx}]: functionCall id=${part.functionCall?.id} name=${part.functionCall?.name}`,
+          );
         }
-        fixedMessages.push(msg);
-      } else {
-        fixedMessages.push(msg);
+        if ('functionResponse' in part && part.functionResponse) {
+          const response = part.functionResponse.response;
+          const isCancelled =
+            typeof response?.error === 'string' &&
+            response.error.includes('[Operation Cancelled]');
+          const responseId = (part.functionResponse as { id?: string }).id;
+          this.logger.debug(
+            () =>
+              `    Part[${partIdx}]: functionResponse id=${responseId} name=${part.functionResponse?.name} cancelled=${isCancelled}`,
+          );
+        }
+      });
+    });
+
+    const messages: Array<{
+      role: 'user' | 'assistant';
+      content:
+        | string
+        | Array<
+            | { type: 'text'; text: string }
+            | { type: 'tool_use'; id: string; name: string; input: unknown }
+            | { type: 'tool_result'; tool_use_id: string; content: string }
+          >;
+    }> = [];
+
+    for (let i = 0; i < contents.length; i++) {
+      const content = contents[i];
+      if (!content.role || content.role === 'system' || !content.parts)
+        continue;
+
+      const role = content.role === 'model' ? 'assistant' : content.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+
+      type AnthropicContentBlock =
+        | { type: 'text'; text: string }
+        | { type: 'tool_use'; id: string; name: string; input: unknown }
+        | { type: 'tool_result'; tool_use_id: string; content: string };
+
+      let messageContent: string | AnthropicContentBlock[] = '';
+      const contentBlocks: AnthropicContentBlock[] = [];
+
+      for (const part of content.parts) {
+        if (part.text) {
+          if (typeof messageContent === 'string') {
+            messageContent += part.text;
+          } else {
+            contentBlocks.push({ type: 'text', text: part.text });
+          }
+        } else if (part.functionCall) {
+          // Convert to array format if not already
+          if (typeof messageContent === 'string' && messageContent) {
+            contentBlocks.push({ type: 'text', text: messageContent });
+            messageContent = contentBlocks;
+          } else if (typeof messageContent === 'string') {
+            messageContent = contentBlocks;
+          }
+
+          // Transform tool ID to Anthropic format
+          // The ID MUST exist - FAIL FAST
+          if (!part.functionCall.id) {
+            throw new Error(
+              `Function call for '${part.functionCall.name}' is missing required ID`,
+            );
+          }
+          const toolId = this.transformToolId(part.functionCall.id);
+
+          contentBlocks.push({
+            type: 'tool_use',
+            id: toolId,
+            name: part.functionCall.name || '',
+            input: part.functionCall.args || {},
+          });
+        } else if (part.functionResponse) {
+          // Convert to array format if not already
+          if (typeof messageContent === 'string' && messageContent) {
+            contentBlocks.push({ type: 'text', text: messageContent });
+            messageContent = contentBlocks;
+          } else if (typeof messageContent === 'string') {
+            messageContent = contentBlocks;
+          }
+
+          // The function response MUST have an ID - FAIL FAST
+          if (!part.functionResponse.id) {
+            throw new Error(
+              `Function response for '${part.functionResponse.name}' is missing required ID`,
+            );
+          }
+          // Transform the ID to Anthropic format
+          const toolUseId = this.transformToolId(part.functionResponse.id);
+
+          contentBlocks.push({
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: JSON.stringify(part.functionResponse.response),
+          });
+        }
       }
+
+      if (contentBlocks.length > 0) {
+        messageContent = contentBlocks;
+      }
+
+      messages.push({
+        role,
+        content: messageContent,
+      });
     }
 
-    // Handle any remaining pending tool calls at the end
-    if (pendingToolCalls.length > 0) {
-      for (const toolCall of pendingToolCalls) {
-        fixedMessages.push({
-          role: 'tool' as const,
-          tool_call_id: toolCall.id,
-          content: 'Error: Tool execution was interrupted. Please retry.',
-        } as IMessage);
+    // NO synthetic handling here - should be done in GeminiCompatibleWrapper
+    return messages;
+  }
+
+  /*
+   * REMOVED - should be handled in GeminiCompatibleWrapper  
+   * Fix orphaned tool responses by injecting synthetic tool calls
+   * This handles cases where tools were cancelled before being sent to the model
+   *
+  private fixOrphanedToolResponses(
+    messages: Array<{
+      role: 'user' | 'assistant';
+      content:
+        | string
+        | Array<
+            | { type: 'text'; text: string }
+            | { type: 'tool_use'; id: string; name: string; input: unknown }
+            | { type: 'tool_result'; tool_use_id: string; content: string }
+          >;
+    }>
+  ): Array<{
+    role: 'user' | 'assistant';
+    content:
+      | string
+      | Array<
+          | { type: 'text'; text: string }
+          | { type: 'tool_use'; id: string; name: string; input: unknown }
+          | { type: 'tool_result'; tool_use_id: string; content: string }
+        >;
+  }> {
+    this.logger.debug(() => 
+      `[fixOrphanedToolResponses] Checking ${messages.length} messages for orphaned tool responses`
+    );
+    
+    // Track all tool_use IDs we've seen
+    const toolUseIds = new Set<string>();
+    
+    // Track orphaned tool_result blocks
+    const orphanedToolResults: Array<{
+      messageIndex: number;
+      blockIndex: number;
+      toolResult: { type: 'tool_result'; tool_use_id: string; content: string };
+    }> = [];
+
+    // First pass: collect all tool_use IDs and identify orphaned tool_results
+    messages.forEach((message, msgIndex) => {
+      if (Array.isArray(message.content)) {
+        message.content.forEach((block, blockIndex) => {
+          if (block.type === 'tool_use') {
+            toolUseIds.add(block.id);
+            this.logger.debug(() => 
+              `  Found tool_use at msg[${msgIndex}]: id=${block.id}, name=${block.name}`
+            );
+          } else if (block.type === 'tool_result') {
+            this.logger.debug(() => 
+              `  Found tool_result at msg[${msgIndex}]: tool_use_id=${block.tool_use_id}, has_matching_call=${toolUseIds.has(block.tool_use_id)}`
+            );
+            // Check if this tool_result has a matching tool_use
+            if (!toolUseIds.has(block.tool_use_id)) {
+              // Check if the content indicates cancellation
+              const content = block.content;
+              if (content.includes('[Operation Cancelled]') || 
+                  content.includes('Tool execution cancelled') ||
+                  content.includes('cancelled by user')) {
+                orphanedToolResults.push({
+                  messageIndex: msgIndex,
+                  blockIndex,
+                  toolResult: block
+                });
+                this.logger.debug(() => 
+                  `    -> Orphaned cancelled tool_result detected: ${block.tool_use_id}`
+                );
+              }
+            }
+          }
+        });
       }
+    });
+
+    // If no orphaned results, return as-is
+    if (orphanedToolResults.length === 0) {
+      return messages;
     }
+
+    // Second pass: inject synthetic tool_use blocks for orphaned tool_results
+    // We need to add them to the previous assistant message or create one
+    const fixedMessages = [...messages];
+    
+    orphanedToolResults.forEach(({ toolResult }) => {
+      // Find or create an assistant message to add the synthetic tool_use
+      let assistantMessageIndex = -1;
+      
+      // Look for the last assistant message before the tool_result
+      for (let i = fixedMessages.length - 1; i >= 0; i--) {
+        if (fixedMessages[i].role === 'assistant') {
+          assistantMessageIndex = i;
+          break;
+        }
+      }
+      
+      if (assistantMessageIndex === -1) {
+        // No assistant message found, create one
+        fixedMessages.unshift({
+          role: 'assistant',
+          content: []
+        });
+        assistantMessageIndex = 0;
+      }
+      
+      // Ensure the assistant message has array content
+      const assistantMessage = fixedMessages[assistantMessageIndex];
+      if (typeof assistantMessage.content === 'string') {
+        const text = assistantMessage.content;
+        assistantMessage.content = text ? [{ type: 'text', text }] : [];
+      }
+      
+      // Add synthetic tool_use for the cancelled tool
+      (assistantMessage.content as Array<any>).push({
+        type: 'tool_use',
+        id: toolResult.tool_use_id,
+        name: 'cancelled_tool', // We don't have the original name, use a placeholder
+        input: { status: 'cancelled_before_execution' }
+      });
+      
+      this.logger.debug(() => 
+        `Injected synthetic tool_use for cancelled tool with ID: ${toolResult.tool_use_id}`
+      );
+    });
 
     return fixedMessages;
+  }
+  */
+
+  /**
+   * Build complete response from streaming chunks
+   */
+  private buildCompleteResponse(chunks: Anthropic.MessageStreamEvent[]): {
+    content: Array<{
+      type: 'text' | 'tool_use';
+      text?: string;
+      id?: string;
+      name?: string;
+      input?: unknown;
+    }>;
+  } | null {
+    const contentBlocks: Array<{
+      type: 'text' | 'tool_use';
+      text?: string;
+      id?: string;
+      name?: string;
+      input?: unknown;
+    }> = [];
+    let currentTextBlock = '';
+    let currentToolCall: { id: string; name: string; input: string } | null =
+      null;
+
+    for (const chunk of chunks) {
+      if (chunk.type === 'content_block_start') {
+        if (chunk.content_block.type === 'tool_use') {
+          currentToolCall = {
+            id: chunk.content_block.id,
+            name: chunk.content_block.name,
+            input: '',
+          };
+        }
+      } else if (chunk.type === 'content_block_delta') {
+        if (chunk.delta.type === 'text_delta') {
+          currentTextBlock += chunk.delta.text;
+        } else if (chunk.delta.type === 'input_json_delta' && currentToolCall) {
+          currentToolCall.input += chunk.delta.partial_json;
+        }
+      } else if (chunk.type === 'content_block_stop') {
+        if (currentTextBlock) {
+          contentBlocks.push({ type: 'text', text: currentTextBlock });
+          currentTextBlock = '';
+        }
+        if (currentToolCall) {
+          contentBlocks.push({
+            type: 'tool_use',
+            id: currentToolCall.id,
+            name: currentToolCall.name,
+            input: currentToolCall.input
+              ? JSON.parse(currentToolCall.input)
+              : undefined,
+          });
+          currentToolCall = null;
+        }
+      }
+    }
+
+    // Handle any remaining text
+    if (currentTextBlock) {
+      contentBlocks.push({ type: 'text', text: currentTextBlock });
+    }
+
+    return contentBlocks.length > 0 ? { content: contentBlocks } : null;
+  }
+
+  // @ts-expect-error - Method may be used in future, kept for now
+  private generateToolId(): string {
+    return `tool_${Math.random().toString(36).substring(2, 15)}`;
   }
 
   /**
@@ -923,6 +1126,15 @@ ${llxprtPrompts}`;
    */
   override getModelParams(): Record<string, unknown> | undefined {
     return this.modelParams;
+  }
+
+  /**
+   * Set temporary system instruction for the next generateChatCompletion call
+   */
+  override setTemporarySystemInstruction(
+    systemInstruction: string | undefined,
+  ): void {
+    this.temporarySystemInstruction = systemInstruction;
   }
 
   /**

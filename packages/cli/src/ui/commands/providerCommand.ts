@@ -171,12 +171,6 @@ export const providerCommand: SlashCommand = {
           context.services.config.setModel(defaultModel);
         }
 
-        // Clear conversation history BEFORE switching to prevent tool call ID mismatches
-        const geminiClient = context.services.config.getGeminiClient();
-        if (geminiClient && geminiClient.isInitialized()) {
-          await geminiClient.resetChat();
-        }
-
         // Keep the current auth type - auth only affects GeminiProvider internally
         const currentAuthType =
           context.services.config.getContentGeneratorConfig()?.authType ||
@@ -195,9 +189,6 @@ export const providerCommand: SlashCommand = {
             Date.now(),
           );
         }
-
-        // Clear UI history to prevent tool call ID mismatches
-        context.ui.clear();
       }
 
       // Trigger payment mode check if available

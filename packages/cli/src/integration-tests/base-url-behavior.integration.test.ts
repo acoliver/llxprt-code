@@ -621,7 +621,7 @@ function createMockProvider(name: string): IProvider & { baseUrl?: string } {
     getDefaultModel: () => 'test-model',
 
     async *generateChatCompletion() {
-      yield { content: 'test response' };
+      yield { role: 'model', parts: [{ text: 'test response' }] };
     },
 
     getServerTools: () => [],

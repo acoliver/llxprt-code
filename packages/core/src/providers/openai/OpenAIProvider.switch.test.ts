@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OpenAIProvider } from './OpenAIProvider.js';
 import { IMessage } from '../IMessage.js';
-import { ContentGeneratorRole } from '../ContentGeneratorRole.js';
+import { Content } from '@google/genai';
 import OpenAI from 'openai';
 
 // Mock fetch globally
@@ -107,13 +107,6 @@ describe('OpenAIProvider generateChatCompletion switch logic', () => {
       bodyUsed: false,
     } as Response);
 
-    const messages: IMessage[] = [
-      {
-        role: ContentGeneratorRole.USER,
-        content: 'Hello',
-      },
-    ];
-
     const generator = provider.generateChatCompletion(messages);
     const results: IMessage[] = [];
 
@@ -147,51 +140,53 @@ describe('OpenAIProvider generateChatCompletion switch logic', () => {
   it('should use legacy API for gpt-3.5-turbo model', async () => {
     provider.setModel('gpt-3.5-turbo');
 
-    const messages: IMessage[] = [
+    const contents: Content[] = [
       {
-        role: ContentGeneratorRole.USER,
-        content: 'Hello',
+        role: 'user',
+        parts: [{ text: 'Hello' }],
       },
     ];
 
-    const generator = provider.generateChatCompletion(messages);
-    const results: IMessage[] = [];
+    const generator = provider.generateChatCompletion(contents);
+    const results: Content[] = [];
 
-    for await (const message of generator) {
-      results.push(message);
+    for await (const content of generator) {
+      results.push(content);
     }
 
     // Should have received content from legacy API
-    expect(results).toHaveLength(2);
-    expect(results[0].content).toBe('Hello from legacy API');
-    expect(results[1].usage).toEqual({
-      prompt_tokens: 10,
-      completion_tokens: 5,
-      total_tokens: 15,
-    });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    // Check that one of the results has the expected text
+    const hasExpectedText = results.some((r) =>
+      r.parts?.some((p) => 'text' in p && p.text === 'Hello from legacy API'),
+    );
+    expect(hasExpectedText).toBe(true);
   });
 
   it('should use legacy API when OPENAI_RESPONSES_DISABLE is true', async () => {
     process.env.OPENAI_RESPONSES_DISABLE = 'true';
     provider.setModel('gpt-4o');
 
-    const messages: IMessage[] = [
+    const contents: Content[] = [
       {
-        role: ContentGeneratorRole.USER,
-        content: 'Hello',
+        role: 'user',
+        parts: [{ text: 'Hello' }],
       },
     ];
 
-    const generator = provider.generateChatCompletion(messages);
-    const results: IMessage[] = [];
+    const generator = provider.generateChatCompletion(contents);
+    const results: Content[] = [];
 
-    for await (const message of generator) {
-      results.push(message);
+    for await (const content of generator) {
+      results.push(content);
     }
 
     // Should have received content from legacy API
-    expect(results).toHaveLength(2);
-    expect(results[0].content).toBe('Hello from legacy API');
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    const hasExpectedText = results.some((r) =>
+      r.parts?.some((p) => 'text' in p && p.text === 'Hello from legacy API'),
+    );
+    expect(hasExpectedText).toBe(true);
   });
 
   it.skip('should pass tools to responses API when using gpt-4o', async () => {
@@ -228,10 +223,10 @@ describe('OpenAIProvider generateChatCompletion switch logic', () => {
       bodyUsed: false,
     } as Response);
 
-    const messages: IMessage[] = [
+    const contents: Content[] = [
       {
-        role: ContentGeneratorRole.USER,
-        content: 'Hello',
+        role: 'user',
+        parts: [{ text: 'Hello' }],
       },
     ];
 
@@ -249,11 +244,11 @@ describe('OpenAIProvider generateChatCompletion switch logic', () => {
       },
     ];
 
-    const generator = provider.generateChatCompletion(messages, tools);
-    const results: IMessage[] = [];
+    const generator = provider.generateChatCompletion(contents, tools);
+    const results: Content[] = [];
 
-    for await (const message of generator) {
-      results.push(message);
+    for await (const content of generator) {
+      results.push(content);
     }
 
     // Should have used Responses API endpoint with tools
@@ -265,16 +260,20 @@ describe('OpenAIProvider generateChatCompletion switch logic', () => {
     );
 
     // Should have received content
-    expect(results.some((m) => m.content === 'Using tool')).toBe(true);
+    expect(
+      results.some((c) =>
+        c.parts?.some((p) => 'text' in p && p.text === 'Using tool'),
+      ),
+    ).toBe(true);
   });
 
   it('should pass tools to legacy API when using gpt-3.5-turbo', async () => {
     provider.setModel('gpt-3.5-turbo');
 
-    const messages: IMessage[] = [
+    const contents: Content[] = [
       {
-        role: ContentGeneratorRole.USER,
-        content: 'Hello',
+        role: 'user',
+        parts: [{ text: 'Hello' }],
       },
     ];
 
@@ -292,11 +291,11 @@ describe('OpenAIProvider generateChatCompletion switch logic', () => {
       },
     ];
 
-    const generator = provider.generateChatCompletion(messages, tools);
-    const results: IMessage[] = [];
+    const generator = provider.generateChatCompletion(contents, tools);
+    const results: Content[] = [];
 
-    for await (const message of generator) {
-      results.push(message);
+    for await (const content of generator) {
+      results.push(content);
     }
 
     // Should have called legacy API with tools

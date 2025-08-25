@@ -5,7 +5,6 @@
  */
 
 import type { IProvider as Provider } from '../IProvider.js';
-import type { IMessage as ProviderMessage } from '../IMessage.js';
 import type { ITool as ProviderTool } from '../ITool.js';
 import { ContentGeneratorRole } from '../ContentGeneratorRole.js';
 import {
@@ -15,6 +14,29 @@ import {
   Part,
   ContentListUnion,
 } from '@google/genai';
+
+// Legacy message format for compatibility - will be removed in future cleanup
+interface LegacyProviderMessage {
+  id?: string;
+  role: ContentGeneratorRole | 'system';
+  content: string;
+  parts?: Part[];
+  tool_call_id?: string;
+  tool_name?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
 import {
   GeminiEventType,
   ToolCallRequestInfo,
@@ -23,6 +45,7 @@ import {
   ServerGeminiToolCallRequestEvent,
   ServerGeminiUsageMetadataEvent,
 } from '../../core/turn.js';
+import { DebugLogger } from '../../debug/index.js';
 
 /**
  * Wrapper that makes any IProvider compatible with Gemini's ContentGenerator interface
@@ -30,6 +53,7 @@ import {
 
 export class GeminiCompatibleWrapper {
   private readonly provider: Provider;
+  private readonly logger = new DebugLogger('llxprt:wrapper');
 
   constructor(provider: Provider) {
     this.provider = provider;
@@ -218,24 +242,267 @@ export class GeminiCompatibleWrapper {
    * @param params Parameters for content generation
    * @returns A promise resolving to a Gemini-formatted response
    */
+  /**
+   * @plan PLAN-20250113-SIMPLIFICATION.P13
+   * @requirement REQ-INT-001.1
+   */
   async generateContent(params: {
     model: string;
     contents: ContentListUnion;
     config?: GenerateContentConfig;
   }): Promise<GenerateContentResponse> {
-    // Convert Gemini contents to provider messages
-    const messages = this.convertContentsToMessages(params.contents);
+    // Convert ContentListUnion to Content[] format
+    let contents: Content[];
+    if (typeof params.contents === 'string') {
+      // Convert string to Content[]
+      contents = [{ role: 'user', parts: [{ text: params.contents }] }];
+    } else if (Array.isArray(params.contents)) {
+      // Check if it's Content[] or PartUnion[]
+      if (
+        params.contents.length > 0 &&
+        typeof params.contents[0] === 'object' &&
+        'role' in params.contents[0]
+      ) {
+        // It's Content[]
+        contents = params.contents as Content[];
+      } else {
+        // It's PartUnion[] - convert to Content[]
+        const parts: Part[] = params.contents.map((item) =>
+          typeof item === 'string' ? { text: item } : (item as Part),
+        );
+        contents = [{ role: 'user', parts }];
+      }
+    } else {
+      // It's a single Content or Part - normalize to Content[]
+      if ('role' in params.contents) {
+        // It's a Content
+        contents = [params.contents as Content];
+      } else {
+        // It's a Part - wrap in Content
+        contents = [{ role: 'user', parts: [params.contents as Part] }];
+      }
+    }
 
-    // Collect full response from provider stream
-    const responseMessages: ProviderMessage[] = [];
-    const stream = this.provider.generateChatCompletion(messages);
+    // Handle system messages based on provider capabilities
+    // Extract system messages from contents array and systemInstruction config
+    const systemMessages: string[] = [];
+
+    // Get system messages from contents
+    const systemContents = contents.filter((c) => c.role === 'system');
+    for (const systemContent of systemContents) {
+      const systemText =
+        systemContent.parts?.map((p) => p.text || '').join('') || '';
+      if (systemText) {
+        systemMessages.push(systemText);
+      }
+    }
+
+    // Get system instruction from config
+    if (params.config?.systemInstruction) {
+      let systemContent: string;
+      if (typeof params.config.systemInstruction === 'string') {
+        systemContent = params.config.systemInstruction;
+      } else {
+        const systemInst = params.config.systemInstruction as Content;
+        systemContent =
+          systemInst.parts?.map((p: Part) => p.text || '').join('\n') || '';
+      }
+      if (systemContent) {
+        systemMessages.push(systemContent);
+      }
+    }
+
+    // Handle system messages - NO provider supports system role in Content[]
+    // Gemini API expects system instructions via systemInstruction parameter, not in contents
+    if (systemMessages.length > 0) {
+      // Remove system messages from contents for ALL providers
+      contents = contents.filter((c) => c.role !== 'system');
+
+      // Pass system messages to provider using temporary system instruction
+      const combinedSystemMessage = systemMessages.join('\n\n');
+      if (this.provider.setTemporarySystemInstruction) {
+        this.provider.setTemporarySystemInstruction(combinedSystemMessage);
+      }
+    }
+
+    // Fix orphaned tool calls/responses for Anthropic and OpenAI providers
+    // Gemini doesn't require this as it handles cancellations gracefully
+    if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
+      contents = this.fixOrphanedToolCallsAndResponses(contents);
+    }
+
+    // Collect full response from provider stream using Content[] directly
+    const responseContents: Content[] = [];
+    const stream = this.provider.generateChatCompletion(contents);
 
     for await (const chunk of stream) {
-      responseMessages.push(chunk as ProviderMessage);
+      responseContents.push(chunk);
     }
 
     // Convert provider response to Gemini format
-    return this.convertMessagesToResponse(responseMessages);
+    return this.convertContentsToResponse(responseContents);
+  }
+
+  /**
+   * Fix orphaned tool calls and responses in the conversation
+   * Handles both:
+   * 1. Orphaned tool calls (functionCall without matching functionResponse)
+   * 2. Orphaned tool responses (functionResponse without matching functionCall)
+   *
+   * This is critical for Anthropic and OpenAI providers which require strict pairing
+   */
+  private fixOrphanedToolCallsAndResponses(contents: Content[]): Content[] {
+    this.logger.debug(
+      () => '[WRAPPER] Checking for orphaned tool calls/responses',
+    );
+
+    const fixed: Content[] = [];
+
+    // First pass: identify all tool calls and responses
+    const toolCalls = new Map<
+      string,
+      { name: string; messageIndex: number; isModel: boolean }
+    >();
+    const toolResponses = new Set<string>();
+
+    contents.forEach((content, idx) => {
+      content.parts?.forEach((part: Part) => {
+        if ('functionCall' in part && part.functionCall?.id) {
+          // If a function call exists but has no name, that's a critical error
+          if (!part.functionCall.name) {
+            throw new Error(
+              `Function call with id ${part.functionCall.id} is missing a name. ` +
+                `This is a critical error in the conversation history at message index ${idx}.`,
+            );
+          }
+          toolCalls.set(part.functionCall.id, {
+            name: part.functionCall.name,
+            messageIndex: idx,
+            isModel: content.role === 'model',
+          });
+        }
+        if ('functionResponse' in part) {
+          const responseId = (part.functionResponse as { id?: string }).id;
+          if (responseId) {
+            toolResponses.add(responseId);
+          }
+        }
+      });
+    });
+
+    // Identify orphaned tool calls (no matching response)
+    const orphanedToolCalls = new Set<string>();
+    for (const [id, info] of toolCalls) {
+      if (!toolResponses.has(id)) {
+        // Only consider model tool calls as orphaned (user tool calls don't need responses)
+        if (info.isModel) {
+          orphanedToolCalls.add(id);
+          this.logger.debug(
+            () =>
+              `[WRAPPER] Found orphaned tool call: id=${id}, name=${info.name}, messageIndex=${info.messageIndex}`,
+          );
+        }
+      }
+    }
+
+    // Process messages and add synthetic responses for orphaned calls
+    for (let i = 0; i < contents.length; i++) {
+      const content = contents[i];
+
+      // Check if this is a model message with orphaned tool calls
+      const orphanedInThisMessage: Array<{ id: string; name: string }> = [];
+      if (content.role === 'model') {
+        content.parts?.forEach((part: Part) => {
+          if ('functionCall' in part && part.functionCall?.id) {
+            if (orphanedToolCalls.has(part.functionCall.id)) {
+              // We already validated name exists in the first pass
+              if (!part.functionCall.name) {
+                throw new Error(
+                  `Orphaned function call with id ${part.functionCall.id} has no name. This should have been caught earlier.`,
+                );
+              }
+              orphanedInThisMessage.push({
+                id: part.functionCall.id,
+                name: part.functionCall.name,
+              });
+            }
+          }
+        });
+      }
+
+      // Add the original message
+      fixed.push(content);
+
+      // CRITICAL: Add synthetic response IMMEDIATELY after model message with orphaned calls
+      // This ensures Anthropic/OpenAI see tool_result immediately after tool_use
+      if (orphanedInThisMessage.length > 0) {
+        const syntheticParts: Part[] = orphanedInThisMessage.map((call) => ({
+          functionResponse: {
+            name: call.name,
+            response: {
+              error: '[Operation Cancelled] - Tool call was interrupted',
+            },
+            id: call.id,
+          },
+        }));
+
+        const syntheticResponse: Content = {
+          role: 'user',
+          parts: syntheticParts,
+        };
+
+        this.logger.debug(
+          () =>
+            `[WRAPPER] Inserting synthetic response for ${orphanedInThisMessage.length} orphaned tool calls immediately after model message ${i}`,
+        );
+
+        // Insert the synthetic response RIGHT AFTER the model message
+        fixed.push(syntheticResponse);
+
+        // Mark that we've handled these orphaned calls
+        orphanedInThisMessage.forEach((call) =>
+          orphanedToolCalls.delete(call.id),
+        );
+      }
+    }
+
+    // Check for orphaned responses (responses without matching calls)
+    // This is less common but can happen in edge cases
+    const responseIds = new Set<string>();
+    const callIds = new Set<string>();
+
+    fixed.forEach((content) => {
+      content.parts?.forEach((part: Part) => {
+        if ('functionCall' in part && part.functionCall?.id) {
+          callIds.add(part.functionCall.id);
+        }
+        if ('functionResponse' in part) {
+          const responseId = (part.functionResponse as { id?: string }).id;
+          if (responseId) {
+            responseIds.add(responseId);
+          }
+        }
+      });
+    });
+
+    const orphanedResponses = Array.from(responseIds).filter(
+      (id) => !callIds.has(id),
+    );
+    if (orphanedResponses.length > 0) {
+      this.logger.debug(
+        () =>
+          `[WRAPPER] Warning: Found ${orphanedResponses.length} orphaned responses without matching calls: ${orphanedResponses.join(', ')}`,
+      );
+      // For now, we don't remove orphaned responses as they might be intentional
+      // But we log them for debugging purposes
+    }
+
+    this.logger.debug(
+      () =>
+        `[WRAPPER] Fixed contents: ${contents.length} -> ${fixed.length} messages`,
+    );
+
+    return fixed;
   }
 
   /**
@@ -243,36 +510,135 @@ export class GeminiCompatibleWrapper {
    * @param params Parameters for content generation
    * @returns An async generator yielding Gemini-formatted responses
    */
+  /**
+   * @plan PLAN-20250113-SIMPLIFICATION.P13
+   * @requirement REQ-INT-001.1
+   */
   async *generateContentStream(params: {
     model: string;
     contents: ContentListUnion;
     config?: GenerateContentConfig;
   }): AsyncGenerator<GenerateContentResponse> {
-    // Convert Gemini contents to provider messages
-    let messages = this.convertContentsToMessages(params.contents);
+    this.logger.debug(() => '[WRAPPER] generateContentStream called');
+    this.logger.debug(() => `[WRAPPER] Provider type: ${this.provider.name}`);
+    this.logger.debug(() => `[WRAPPER] Model: ${params.model}`);
 
-    // Add system instruction if provided
+    // Convert ContentListUnion to Content[] format
+    let contents: Content[];
+    if (typeof params.contents === 'string') {
+      // Convert string to Content[]
+      contents = [{ role: 'user', parts: [{ text: params.contents }] }];
+    } else if (Array.isArray(params.contents)) {
+      // Check if it's Content[] or PartUnion[]
+      if (
+        params.contents.length > 0 &&
+        typeof params.contents[0] === 'object' &&
+        'role' in params.contents[0]
+      ) {
+        // It's Content[]
+        contents = params.contents as Content[];
+      } else {
+        // It's PartUnion[] - convert to Content[]
+        const parts: Part[] = params.contents.map((item) =>
+          typeof item === 'string' ? { text: item } : (item as Part),
+        );
+        contents = [{ role: 'user', parts }];
+      }
+    } else {
+      // It's a single Content or Part - normalize to Content[]
+      if ('role' in params.contents) {
+        // It's a Content
+        contents = [params.contents as Content];
+      } else {
+        // It's a Part - wrap in Content
+        contents = [{ role: 'user', parts: [params.contents as Part] }];
+      }
+    }
+
+    // Handle system messages based on provider capabilities
+    // Extract system messages from contents array and systemInstruction config
+    const systemMessages: string[] = [];
+
+    // Get system messages from contents
+    const systemContents = contents.filter((c) => c.role === 'system');
+    for (const systemContent of systemContents) {
+      const systemText =
+        systemContent.parts?.map((p) => p.text || '').join('') || '';
+      if (systemText) {
+        systemMessages.push(systemText);
+      }
+    }
+
+    // Get system instruction from config
     if (params.config?.systemInstruction) {
       let systemContent: string;
-
-      // Handle different systemInstruction formats
       if (typeof params.config.systemInstruction === 'string') {
         systemContent = params.config.systemInstruction;
       } else {
-        // It's a ContentUnion - convert to string
-        const systemMessages = this.convertContentsToMessages(
-          params.config.systemInstruction,
-        );
-        systemContent = systemMessages.map((m) => m.content).join('\n');
+        const systemInst = params.config.systemInstruction as Content;
+        systemContent =
+          systemInst.parts?.map((p: Part) => p.text || '').join('\n') || '';
       }
+      if (systemContent) {
+        systemMessages.push(systemContent);
+      }
+    }
 
-      messages = [
-        {
-          role: 'system' as const,
-          content: systemContent,
-        },
-        ...messages,
-      ];
+    // Log the contents being sent
+    this.logger.debug(
+      () => `[WRAPPER] Contents to send (${contents.length} messages):`,
+    );
+    contents.forEach((content, idx) => {
+      const hasFunctionCall = content.parts?.some(
+        (p: Part) => 'functionCall' in p,
+      );
+      const hasFunctionResponse = content.parts?.some(
+        (p: Part) => 'functionResponse' in p,
+      );
+      this.logger.debug(
+        () =>
+          `[WRAPPER]   Message[${idx}]: role=${content.role}, hasFunctionCall=${hasFunctionCall}, hasFunctionResponse=${hasFunctionResponse}`,
+      );
+
+      // Log function call/response details
+      content.parts?.forEach((part: Part, partIdx: number) => {
+        if ('functionCall' in part && part.functionCall) {
+          this.logger.debug(
+            () =>
+              `[WRAPPER]     Part[${partIdx}]: functionCall id=${part.functionCall?.id} name=${part.functionCall?.name}`,
+          );
+        }
+        if ('functionResponse' in part && part.functionResponse) {
+          const response = part.functionResponse.response;
+          const isCancelled =
+            typeof response?.error === 'string' &&
+            response.error.includes('[Operation Cancelled]');
+          const responseId = (part.functionResponse as { id?: string }).id;
+          this.logger.debug(
+            () =>
+              `[WRAPPER]     Part[${partIdx}]: functionResponse id=${responseId} name=${part.functionResponse?.name} cancelled=${isCancelled}`,
+          );
+        }
+      });
+    });
+
+    // Handle system messages - NO provider supports system role in Content[]
+    // Gemini API expects system instructions via systemInstruction parameter, not in contents
+    if (systemMessages.length > 0) {
+      // Remove system messages from contents for ALL providers
+      contents = contents.filter((c) => c.role !== 'system');
+
+      // Pass system messages to provider using temporary system instruction
+      const combinedSystemMessage = systemMessages.join('\n\n');
+      if (this.provider.setTemporarySystemInstruction) {
+        this.provider.setTemporarySystemInstruction(combinedSystemMessage);
+      }
+    }
+
+    // Fix orphaned tool calls/responses for Anthropic and OpenAI providers
+    // Gemini doesn't require this as it handles cancellations gracefully
+    if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
+      contents = this.fixOrphanedToolCallsAndResponses(contents);
     }
 
     // Extract and convert tools from config if available
@@ -282,9 +648,9 @@ export class GeminiCompatibleWrapper {
       providerTools = this.convertGeminiToolsToProviderTools(geminiTools);
     }
 
-    // Stream from provider and convert each chunk
+    // Stream from provider using Content[] directly - no conversion needed!
     const stream = this.provider.generateChatCompletion(
-      messages,
+      contents,
       providerTools,
     );
 
@@ -293,13 +659,11 @@ export class GeminiCompatibleWrapper {
     let hasUsageMetadata = false;
 
     for await (const chunk of stream) {
-      const response = this.convertMessageToStreamResponse(
-        chunk as ProviderMessage,
-      );
+      const response = this.convertContentToStreamResponse(chunk);
       collectedChunks.push(response);
 
-      // Check if this chunk has usage metadata
-      if ((chunk as ProviderMessage).usage) {
+      // Check if this chunk has usage metadata (now checking Content format)
+      if ('usage' in chunk) {
         hasUsageMetadata = true;
       }
 
@@ -308,15 +672,15 @@ export class GeminiCompatibleWrapper {
     }
 
     // After streaming is complete, yield a final response with usage metadata if we collected any
-    // This mimics how geminiChat.ts logs telemetry after collecting all chunks
     if (hasUsageMetadata && collectedChunks.length > 0) {
       // Find the last chunk with usage metadata
-      const lastChunkWithUsage = [...collectedChunks].reverse().find((chunk) =>
-        // Check if any message in the chunk had usage data
-        chunk.candidates?.some((candidate) =>
-          candidate.content?.parts?.some((part: Part) => 'usage' in part),
-        ),
-      );
+      const lastChunkWithUsage = [...collectedChunks]
+        .reverse()
+        .find((chunk) =>
+          chunk.candidates?.some((candidate) =>
+            candidate.content?.parts?.some((part: Part) => 'usage' in part),
+          ),
+        );
 
       // The telemetry will be logged by the consuming code when it sees the usage metadata
       if (lastChunkWithUsage) {
@@ -332,7 +696,7 @@ export class GeminiCompatibleWrapper {
    * @returns An async iterator of Gemini events
    */
   async *adaptStream(
-    providerStream: AsyncIterableIterator<ProviderMessage>,
+    providerStream: AsyncIterableIterator<LegacyProviderMessage>,
   ): AsyncIterableIterator<ServerGeminiStreamEvent> {
     yield* this.adaptProviderStream(providerStream);
   }
@@ -343,7 +707,7 @@ export class GeminiCompatibleWrapper {
    * @returns Async iterator of Gemini events
    */
   private async *adaptProviderStream(
-    providerStream: AsyncIterableIterator<ProviderMessage>,
+    providerStream: AsyncIterableIterator<LegacyProviderMessage>,
   ): AsyncIterableIterator<ServerGeminiStreamEvent> {
     for await (const message of providerStream) {
       // Emit content event if message has non-empty content
@@ -399,10 +763,12 @@ export class GeminiCompatibleWrapper {
 
   /**
    * Convert Gemini ContentListUnion to provider ProviderMessage array
+   * @deprecated This method is no longer used after Phase 13 simplification
    */
+  // @ts-expect-error - Method kept for tests, will be removed in future cleanup
   private convertContentsToMessages(
     contents: ContentListUnion,
-  ): ProviderMessage[] {
+  ): LegacyProviderMessage[] {
     // Debug logging for OpenRouter issue
     if (process.env.DEBUG) {
       console.log(
@@ -480,7 +846,7 @@ export class GeminiCompatibleWrapper {
       ];
     }
 
-    const messages: ProviderMessage[] = [];
+    const messages: LegacyProviderMessage[] = [];
 
     for (const content of contentArray) {
       // Validate content object
@@ -532,6 +898,7 @@ export class GeminiCompatibleWrapper {
         for (const part of functionResponses) {
           const response = part.functionResponse.response;
           let content: string;
+          let isCancelled = false;
 
           // Check if response contains binary content
           if (
@@ -549,6 +916,10 @@ export class GeminiCompatibleWrapper {
             content = response;
           } else if (response?.error) {
             content = `Error: ${response.error}`;
+            // Check if this is a cancelled tool response
+            if (response.error.includes('[Operation Cancelled]')) {
+              isCancelled = true;
+            }
           } else if (response?.llmContent) {
             content = String(response.llmContent);
           } else if (response?.output) {
@@ -564,18 +935,27 @@ export class GeminiCompatibleWrapper {
             );
           }
 
-          messages.push({
-            role: 'tool',
-            content,
-            tool_call_id: toolCallId,
-            name: part.functionResponse.name,
-          } as ProviderMessage);
+          // For cancelled tools, we might need to handle them specially for Anthropic/OpenAI
+          // Store the cancellation status in the message for later processing
+          const toolMessage: LegacyProviderMessage & { _cancelled?: boolean } =
+            {
+              role: 'tool' as ContentGeneratorRole, // Tool role is needed for tool responses
+              content,
+              tool_call_id: toolCallId,
+              tool_name: part.functionResponse.name,
+            };
+
+          if (isCancelled) {
+            toolMessage._cancelled = true;
+          }
+
+          messages.push(toolMessage);
         }
 
         // If there are binary parts from function responses or non-functionResponse parts, add them as user messages
         const allBinaryParts = [...binaryParts, ...nonFunctionResponseParts];
         if (allBinaryParts.length > 0) {
-          const binaryMessage: ProviderMessage = {
+          const binaryMessage: LegacyProviderMessage = {
             role: ContentGeneratorRole.USER,
             content: '',
           };
@@ -622,7 +1002,7 @@ export class GeminiCompatibleWrapper {
           role = content.role as ContentGeneratorRole | 'system';
         }
 
-        const message: ProviderMessage = {
+        const message: LegacyProviderMessage = {
           role,
           content: combinedText,
         };
@@ -636,16 +1016,19 @@ export class GeminiCompatibleWrapper {
 
         // If this is an assistant message with function calls, add them
         if (role === 'assistant' && functionCalls.length > 0) {
-          message.tool_calls = functionCalls.map((part) => ({
-            id:
-              part.functionCall.id ||
-              `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            type: 'function' as const,
-            function: {
-              name: part.functionCall.name,
-              arguments: JSON.stringify(part.functionCall.args || {}),
-            },
-          }));
+          message.tool_calls = functionCalls.map((part) => {
+            if (!part.functionCall.id) {
+              throw new Error('Function call ID is required but missing');
+            }
+            return {
+              id: part.functionCall.id,
+              type: 'function' as const,
+              function: {
+                name: part.functionCall.name,
+                arguments: JSON.stringify(part.functionCall.args || {}),
+              },
+            };
+          });
         }
 
         messages.push(message);
@@ -657,9 +1040,11 @@ export class GeminiCompatibleWrapper {
 
   /**
    * Convert provider messages to a single Gemini response
+   * @deprecated Replaced by convertContentsToResponse after Phase 13 simplification
    */
+  // @ts-expect-error - Method kept for backward compatibility, will be removed in future cleanup
   private convertMessagesToResponse(
-    messages: ProviderMessage[],
+    messages: LegacyProviderMessage[],
   ): GenerateContentResponse {
     // Combine all messages into a single response
     const combinedContent = messages.map((m) => m.content || '').join('');
@@ -709,10 +1094,43 @@ export class GeminiCompatibleWrapper {
   }
 
   /**
-   * Convert a single provider message to a streaming Gemini response
+   * Convert Content[] array to GenerateContentResponse (for non-streaming)
+   * @param contents Array of Content from provider
+   * @returns GenerateContentResponse for Gemini compatibility
    */
+  private convertContentsToResponse(
+    contents: Content[],
+  ): GenerateContentResponse {
+    // Combine all content into a single response
+    const parts: Part[] = [];
+
+    // Process each content item
+    for (const content of contents) {
+      if (content.parts) {
+        // Content format already has parts - just include them directly
+        parts.push(...content.parts);
+      }
+    }
+
+    return {
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts,
+          },
+        },
+      ],
+    } as GenerateContentResponse;
+  }
+
+  /**
+   * Convert a single provider message to a streaming Gemini response
+   * @deprecated Replaced by convertContentToStreamResponse after Phase 13 simplification
+   */
+  // @ts-expect-error - Method kept for backward compatibility, will be removed in future cleanup
   private convertMessageToStreamResponse(
-    message: ProviderMessage,
+    message: LegacyProviderMessage,
   ): GenerateContentResponse {
     const parts: Part[] = [];
 
@@ -765,6 +1183,43 @@ export class GeminiCompatibleWrapper {
         promptTokenCount: message.usage.prompt_tokens || 0,
         candidatesTokenCount: message.usage.completion_tokens || 0,
         totalTokenCount: message.usage.total_tokens || 0,
+      };
+    }
+
+    return response;
+  }
+
+  /**
+   * Convert Content to GenerateContentResponse format
+   * @param content Content from provider (new format)
+   * @returns GenerateContentResponse for Gemini compatibility
+   */
+  private convertContentToStreamResponse(
+    content: Content,
+  ): GenerateContentResponse {
+    const response: GenerateContentResponse = {
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: content.parts || [],
+          },
+        },
+      ],
+    } as GenerateContentResponse;
+
+    // Include usage metadata if present in the content
+    if ('usage' in content) {
+      const usage = (content as Content & { usage: unknown }).usage as {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      };
+
+      response.usageMetadata = {
+        promptTokenCount: usage.prompt_tokens || 0,
+        candidatesTokenCount: usage.completion_tokens || 0,
+        totalTokenCount: usage.total_tokens || 0,
       };
     }
 

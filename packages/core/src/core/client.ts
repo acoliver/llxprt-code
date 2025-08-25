@@ -44,6 +44,7 @@ import { LoopDetectionService } from '../services/loopDetectionService.js';
 import { ideContext, IdeContext, File } from '../ide/ideContext.js';
 import { ComplexityAnalyzer } from '../services/complexity-analyzer.js';
 import { TodoReminderService } from '../services/todo-reminder-service.js';
+import { DebugLogger } from '../debug/index.js';
 
 function isThinkingSupported(model: string) {
   if (model.startsWith('gemini-2.5')) return true;
@@ -111,6 +112,7 @@ export class GeminiClient {
   private readonly MAX_TURNS = 100;
   private _pendingConfig?: ContentGeneratorConfig;
   private _previousHistory?: Content[];
+  private historyLogger = new DebugLogger('llxprt:history');
   /**
    * Threshold for compression token count as a fraction of the model's token limit.
    * If the chat history exceeds this threshold, it will be compressed.
@@ -233,11 +235,32 @@ export class GeminiClient {
   }
 
   async addHistory(content: Content) {
+    this.historyLogger.debug(() => '[HISTORY] Adding to conversation history:');
+    this.historyLogger.debug(() => `[HISTORY] Content role: ${content.role}`);
+    this.historyLogger.debug(
+      () => `[HISTORY] Content parts: ${JSON.stringify(content.parts)}`,
+    );
+    this.historyLogger.debug(
+      () =>
+        `[HISTORY] Current history length before add: ${this.chat?.getHistory()?.length || 0}`,
+    );
+
     // Ensure chat is initialized before adding history
     if (!this.hasChatInitialized()) {
+      this.historyLogger.debug(
+        () => '[HISTORY] Chat not initialized, resetting chat first',
+      );
       await this.resetChat();
     }
     this.getChat().addHistory(content);
+
+    this.historyLogger.debug(
+      () =>
+        `[HISTORY] History length after add: ${this.chat?.getHistory()?.length || 0}`,
+    );
+    this.historyLogger.debug(
+      () => '[HISTORY] Successfully added content to conversation history',
+    );
   }
 
   getChat(): GeminiChat {

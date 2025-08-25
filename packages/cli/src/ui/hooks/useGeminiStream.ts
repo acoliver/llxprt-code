@@ -27,6 +27,7 @@ import {
   parseAndFormatApiError,
   EmojiFilter,
   FilterConfiguration,
+  DebugLogger,
 } from '@vybestack/llxprt-code-core';
 import { type Part, type PartListUnion, FinishReason } from '@google/genai';
 import {
@@ -57,6 +58,9 @@ import {
 import { useSessionStats } from '../contexts/SessionContext.js';
 import { useTodoContinuation } from './useTodoContinuation.js';
 import { useKeypress } from './useKeypress.js';
+
+// Create debug logger for cancellation flow
+const cancelLogger = new DebugLogger('llxprt:cancel');
 
 export function mergePartListUnions(list: PartListUnion[]): PartListUnion {
   const resultParts: Part[] = [];
@@ -518,11 +522,23 @@ export const useGeminiStream = (
 
   const handleUserCancelledEvent = useCallback(
     (userMessageTimestamp: number) => {
+      cancelLogger.debug(
+        () => '[CANCEL] User pressed ESC, processing cancellation',
+      );
+
       if (turnCancelledRef.current) {
+        cancelLogger.debug(() => '[CANCEL] Turn already cancelled, skipping');
         return;
       }
-      // Track cancelled tool IDs for synthetic response generation
+
+      // Track cancelled tool IDs and names for synthetic response generation
       const cancelledToolIds: string[] = [];
+      const cancelledToolsInfo: Array<{ id: string; name: string }> = [];
+
+      cancelLogger.debug(
+        () =>
+          `[CANCEL] Pending history item before cancellation: ${JSON.stringify(pendingHistoryItemRef.current)}`,
+      );
 
       if (pendingHistoryItemRef.current) {
         if (pendingHistoryItemRef.current.type === 'tool_group') {
@@ -533,8 +549,9 @@ export const useGeminiStream = (
                 tool.status === ToolCallStatus.Confirming ||
                 tool.status === ToolCallStatus.Executing
               ) {
-                // Track the cancelled tool ID
+                // Track the cancelled tool ID and name BEFORE we clear pendingHistoryItemRef
                 cancelledToolIds.push(tool.callId);
+                cancelledToolsInfo.push({ id: tool.callId, name: tool.name });
                 return { ...tool, status: ToolCallStatus.Canceled };
               }
               return tool;
@@ -556,6 +573,47 @@ export const useGeminiStream = (
         console.log('[ESC] Cancelled tool IDs:', cancelledToolIds);
       }
 
+      // CRITICAL FIX: Add synthetic functionResponse parts for cancelled tools
+      // This ensures Anthropic/OpenAI see matching tool_result blocks for tool_use blocks
+      if (cancelledToolsInfo.length > 0) {
+        // Create synthetic functionResponse parts for each cancelled tool
+        const syntheticResponses = cancelledToolsInfo.map((tool) => ({
+          functionResponse: {
+            id: tool.id,
+            name: tool.name,
+            response: {
+              error:
+                '[Operation Cancelled] Tool execution was cancelled by user',
+            },
+          },
+        }));
+
+        cancelLogger.debug(
+          () =>
+            `[CANCEL] Generated ${syntheticResponses.length} synthetic responses`,
+        );
+        cancelLogger.debug(
+          () =>
+            `[CANCEL] Synthetic responses: ${JSON.stringify(syntheticResponses)}`,
+        );
+
+        // Add the synthetic responses to the conversation history
+        // This ensures the model knows these tools were cancelled
+        cancelLogger.debug(
+          () =>
+            '[CANCEL] Adding synthetic responses to history via geminiClient.addHistory()',
+        );
+        geminiClient.addHistory({
+          role: 'user',
+          parts: syntheticResponses,
+        });
+
+        cancelLogger.debug(
+          () =>
+            '[CANCEL] Successfully added synthetic responses to conversation history',
+        );
+      }
+
       addItem(
         {
           type: MessageType.INFO,
@@ -566,7 +624,13 @@ export const useGeminiStream = (
       setIsResponding(false);
       setThought(null); // Reset thought when user cancels
     },
-    [addItem, pendingHistoryItemRef, setPendingHistoryItem, setThought],
+    [
+      addItem,
+      pendingHistoryItemRef,
+      setPendingHistoryItem,
+      setThought,
+      geminiClient,
+    ],
   );
 
   const handleErrorEvent = useCallback(
@@ -843,15 +907,15 @@ export const useGeminiStream = (
       }
 
       if (toolCallRequests.length > 0) {
-        if (process.env.DEBUG) {
-          console.log(
-            '[DEBUG] Scheduling tool calls:',
-            toolCallRequests.map((tc) => ({
-              name: tc.name,
-              callId: tc.callId,
-            })),
-          );
-        }
+        cancelLogger.debug(
+          () =>
+            `[TOOLS] Scheduling ${toolCallRequests.length} tool calls: ${JSON.stringify(
+              toolCallRequests.map((tc) => ({
+                name: tc.name,
+                callId: tc.callId,
+              })),
+            )}`,
+        );
         scheduleToolCalls(toolCallRequests, signal);
       }
       return {

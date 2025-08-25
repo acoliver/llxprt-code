@@ -255,7 +255,7 @@ describe('GeminiCompatibleWrapper', () => {
         role: 'tool',
         content: 'Binary content of type application/pdf was processed.',
         tool_call_id: 'test-call-123',
-        name: 'read_file',
+        tool_name: 'read_file',
       });
 
       // Second message should be a user message with the PDF part
@@ -318,7 +318,7 @@ describe('GeminiCompatibleWrapper', () => {
         role: 'tool',
         content: 'file1.txt\nfile2.txt',
         tool_call_id: 'test-call-456',
-        name: 'list_files',
+        tool_name: 'list_files',
       });
     });
   });

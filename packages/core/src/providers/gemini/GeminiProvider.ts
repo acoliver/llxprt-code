@@ -6,12 +6,11 @@
 
 import { DebugLogger } from '../../debug/index.js';
 import { IModel } from '../IModel.js';
-import { IMessage } from '../IMessage.js';
+import { Content } from '@google/genai';
 import { ITool } from '../ITool.js';
 import {
   Config,
   AuthType,
-  ContentGeneratorRole,
   AuthenticationRequiredError,
   getCoreSystemPromptAsync,
   createCodeAssistContentGenerator,
@@ -60,6 +59,7 @@ export class GeminiProvider extends BaseProvider {
       }>
     | undefined;
   private geminiOAuthManager?: OAuthManager;
+  private temporarySystemInstruction?: string;
 
   constructor(
     apiKey?: string,
@@ -302,18 +302,18 @@ export class GeminiProvider extends BaseProvider {
   }
 
   async *generateChatCompletion(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     _toolFormat?: string,
-  ): AsyncIterableIterator<unknown> {
+  ): AsyncIterableIterator<Content> {
     // Comprehensive debug logging
     this.logger.debug(
-      () => `generateChatCompletion called with ${messages.length} messages`,
+      () => `generateChatCompletion called with ${contents.length} contents`,
     );
-    this.logger.debug(() => `Messages: ${JSON.stringify(messages, null, 2)}`);
+    this.logger.debug(() => `Contents: ${JSON.stringify(contents, null, 2)}`);
     this.logger.debug(
       () =>
-        `First message: ${messages[0] ? JSON.stringify(messages[0], null, 2) : 'NO FIRST MESSAGE'}`,
+        `First content: ${contents[0] ? JSON.stringify(contents[0], null, 2) : 'NO FIRST CONTENT'}`,
     );
     this.logger.debug(
       () =>
@@ -401,10 +401,18 @@ export class GeminiProvider extends BaseProvider {
         const userMemory = this.geminiConfig?.getUserMemory
           ? this.geminiConfig.getUserMemory()
           : '';
-        const systemInstruction = await getCoreSystemPromptAsync(
+        let systemInstruction = await getCoreSystemPromptAsync(
           userMemory,
           oauthModel,
         );
+
+        // If we have a temporary system instruction from GeminiCompatibleWrapper, append it
+        if (this.temporarySystemInstruction) {
+          systemInstruction =
+            systemInstruction + '\n\n' + this.temporarySystemInstruction;
+          // Clear the temporary instruction after use
+          this.temporarySystemInstruction = undefined;
+        }
 
         // Store tools if provided
         if (tools && tools.length > 0) {
@@ -423,7 +431,7 @@ export class GeminiProvider extends BaseProvider {
 
         const request = {
           model: oauthModel,
-          contents: this.convertMessagesToGeminiFormat(messages),
+          contents, // Direct pass-through - no conversion needed!
           systemInstruction,
           config: {
             tools: geminiTools,
@@ -465,29 +473,32 @@ export class GeminiProvider extends BaseProvider {
                   (part as { functionCall: FunctionCall }).functionCall,
               ) || [];
 
-          // Build response message
-          const message: IMessage = {
-            role: ContentGeneratorRole.ASSISTANT,
-            content: text,
-          };
+          // Build response content in Gemini format
+          const parts: Part[] = [];
 
-          // Add function calls if any
-          if (functionCalls && functionCalls.length > 0) {
-            message.tool_calls = functionCalls.map((call: FunctionCall) => ({
-              id:
-                call.id ||
-                `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              type: 'function' as const,
-              function: {
-                name: call.name || 'unknown_function',
-                arguments: JSON.stringify(call.args || {}),
-              },
-            }));
+          // Add text part if present
+          if (text) {
+            parts.push({ text });
           }
 
-          // Only yield if there's content or tool calls
-          if (text || (functionCalls && functionCalls.length > 0)) {
-            yield message;
+          // Add function calls if any, ensuring they have IDs for compatibility
+          if (functionCalls && functionCalls.length > 0) {
+            for (const call of functionCalls) {
+              // Ensure function call has an ID for compatibility with other providers
+              if (!call.id) {
+                call.id = `${call.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+              }
+              parts.push({ functionCall: call });
+            }
+          }
+
+          // Only yield if there are parts
+          if (parts.length > 0) {
+            const content: Content = {
+              role: 'model',
+              parts,
+            };
+            yield content;
           }
         }
         return;
@@ -519,8 +530,7 @@ export class GeminiProvider extends BaseProvider {
       this.toolSchemas = this.convertToolsToGeminiFormat(tools);
     }
 
-    // Convert IMessage[] to Gemini format - do this after storing tools so priming can access them
-    const contents = this.convertMessagesToGeminiFormat(messages);
+    // No conversion needed - Content[] is already in Gemini format!
 
     // Use provided tools or stored tools
     let geminiTools = tools
@@ -544,10 +554,27 @@ export class GeminiProvider extends BaseProvider {
     const userMemory = this.geminiConfig?.getUserMemory
       ? this.geminiConfig.getUserMemory()
       : '';
-    const systemInstruction = await getCoreSystemPromptAsync(
+    let systemInstruction = await getCoreSystemPromptAsync(
       userMemory,
       modelToUse,
     );
+
+    // If we have a temporary system instruction from GeminiCompatibleWrapper, append it
+    if (this.temporarySystemInstruction) {
+      systemInstruction =
+        systemInstruction + '\n\n' + this.temporarySystemInstruction;
+      // Clear the temporary instruction after use
+      this.temporarySystemInstruction = undefined;
+    }
+
+    // Debug: Check if any content has system role
+    const hasSystemRole = contents.some((c) => c.role === 'system');
+    if (hasSystemRole) {
+      this.logger.error('ERROR: Content with system role detected!', contents);
+      throw new Error(
+        'Content with system role is not supported by Gemini API. System instructions should use systemInstruction parameter.',
+      );
+    }
 
     const request = {
       model: modelToUse,
@@ -580,309 +607,30 @@ export class GeminiProvider extends BaseProvider {
               (part as { functionCall: FunctionCall }).functionCall,
           ) || [];
 
-      // Build response message
-      const message: IMessage = {
-        role: ContentGeneratorRole.ASSISTANT,
-        content: text || '',
-      };
+      // Build response content in Gemini format
+      const parts: Part[] = [];
+
+      // Add text part if present
+      if (text) {
+        parts.push({ text });
+      }
 
       // Add function calls if any
       if (functionCalls && functionCalls.length > 0) {
-        message.tool_calls = functionCalls.map((call: FunctionCall) => ({
-          id:
-            call.id ||
-            `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          type: 'function' as const,
-          function: {
-            name: call.name || 'unknown_function',
-            arguments: JSON.stringify(call.args || {}),
-          },
-        }));
-      }
-
-      // Only yield if there's content or tool calls
-      if (text || (functionCalls && functionCalls.length > 0)) {
-        yield message;
-      }
-    }
-  }
-
-  private convertMessagesToGeminiFormat(
-    messages: IMessage[],
-  ): Array<{ role: string; parts: Part[] }> {
-    const contents: Array<{ role: string; parts: Part[] }> = [];
-
-    // Enhanced tracking with more details
-    const functionCalls = new Map<
-      string,
-      {
-        name: string;
-        contentIndex: number;
-        partIndex: number;
-        messageIndex: number; // Track which message this came from
-      }
-    >();
-    const functionResponses = new Map<
-      string,
-      {
-        name: string;
-        contentIndex: number;
-        messageIndex: number;
-      }
-    >();
-
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-
-      // Handle tool responses - each in its own Content object
-      if (msg.role === ContentGeneratorRole.TOOL) {
-        if (!msg.tool_call_id) {
-          this.logger.debug(
-            () =>
-              `Tool response at index ${i} missing tool_call_id, skipping: ${JSON.stringify(msg)}`,
-          );
-          continue;
-        }
-
-        functionResponses.set(msg.tool_call_id, {
-          name: msg.tool_name || 'unknown_function',
-          contentIndex: contents.length,
-          messageIndex: i,
-        });
-
-        // Add each tool response as a separate content immediately
-        contents.push({
-          role: 'user',
-          parts: [
-            {
-              functionResponse: {
-                id: msg.tool_call_id,
-                name: msg.tool_name || 'unknown_function',
-                response: {
-                  output: msg.content || '',
-                },
-              },
-            },
-          ],
-        });
-        continue;
-      }
-
-      // For non-tool messages, convert normally
-      const parts: Part[] = [];
-
-      // Check for parts first (for messages with PDF/image parts but no text content)
-      if (msg.parts && msg.parts.length > 0) {
-        parts.push(...(msg.parts as Part[]));
-      } else if (msg.content) {
-        // Handle PartListUnion: string | Part | Part[]
-        // In practice, content can be PartListUnion even though IMessage types it as string
-        const content = msg.content as string | Part | Part[];
-
-        if (typeof content === 'string') {
-          // Try to parse string in case it's a stringified Part or Part[]
-          if (
-            (content.startsWith('{') && content.endsWith('}')) ||
-            (content.startsWith('[') && content.endsWith(']'))
-          ) {
-            try {
-              const parsed = JSON.parse(content);
-              if (Array.isArray(parsed)) {
-                parts.push(...parsed);
-              } else {
-                parts.push(parsed);
-              }
-            } catch (_e) {
-              // Not valid JSON, treat as text
-              parts.push({ text: content });
-            }
-          } else {
-            parts.push({ text: content });
-          }
-        } else if (Array.isArray(content)) {
-          // Content is Part[]
-          parts.push(...content);
-        } else {
-          // Content is a single Part
-          parts.push(content);
+        for (const call of functionCalls) {
+          parts.push({ functionCall: call });
         }
       }
 
-      // Handle tool calls
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        // Check if function calls were already added via parts
-        const existingFunctionCallIds = new Set<string>();
-        if (msg.parts && msg.parts.length > 0) {
-          for (const part of parts) {
-            if ('functionCall' in part) {
-              const fc = part as { functionCall: FunctionCall };
-              if (fc.functionCall.id) {
-                existingFunctionCallIds.add(fc.functionCall.id);
-              }
-            }
-          }
-        }
-
-        for (const toolCall of msg.tool_calls) {
-          // Skip if this function call was already added via parts
-          if (toolCall.id && existingFunctionCallIds.has(toolCall.id)) {
-            continue;
-          }
-
-          // Ensure tool call has an ID
-          if (!toolCall.id) {
-            this.logger.debug(
-              () =>
-                `Tool call at message ${i} missing ID, generating one: ${JSON.stringify(toolCall)}`,
-            );
-            // Generate a unique ID for the function call
-            toolCall.id = `generated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          }
-
-          const partIndex = parts.length;
-
-          parts.push({
-            functionCall: {
-              id: toolCall.id,
-              name: toolCall.function.name,
-              args: JSON.parse(toolCall.function.arguments),
-            },
-          } as Part);
-
-          // Track this function call with its position
-          functionCalls.set(toolCall.id, {
-            name: toolCall.function.name,
-            contentIndex: contents.length,
-            partIndex,
-            messageIndex: i,
-          });
-        }
-      }
-
-      // Map roles
-      let role = 'user';
-      if (msg.role === ContentGeneratorRole.ASSISTANT) {
-        role = 'model';
-      } else if (msg.role === ContentGeneratorRole.USER) {
-        role = 'user';
-      } else if (msg.role === 'system') {
-        // Gemini doesn't have system role in contents, handle separately
-        role = 'user';
-      }
-
+      // Only yield if there are parts
       if (parts.length > 0) {
-        contents.push({
-          role,
+        const content: Content = {
+          role: 'model',
           parts,
-        });
+        };
+        yield content;
       }
     }
-
-    // Validate and add missing function responses
-    for (const [callId, callInfo] of Array.from(functionCalls.entries())) {
-      if (!functionResponses.has(callId)) {
-        // Create a placeholder response for missing function response
-        this.logger.debug(
-          () =>
-            `Function call ${callInfo.name} (id: ${callId}) has no matching response, adding placeholder`,
-        );
-
-        // Add each function response as a separate content object (same as regular tool responses)
-        contents.push({
-          role: 'user',
-          parts: [
-            {
-              functionResponse: {
-                id: callId,
-                name: callInfo.name,
-                response: {
-                  output: JSON.stringify({
-                    error:
-                      'Function call was interrupted or no response received',
-                    message: `The function "${callInfo.name}" was called but did not receive a response. This may occur if the function execution was interrupted, requires authentication, or encountered an error.`,
-                    callId,
-                    functionName: callInfo.name,
-                  }),
-                },
-              },
-            },
-          ],
-        });
-
-        // Mark this response as added
-        functionResponses.set(callId, {
-          name: callInfo.name,
-          contentIndex: contents.length - 1,
-          messageIndex: -1, // Placeholder response doesn't have original message index
-        });
-      }
-    }
-
-    // Final validation - count function calls and responses
-    let totalFunctionCalls = 0;
-    let totalFunctionResponses = 0;
-    const callsDetail: string[] = [];
-    const responsesDetail: string[] = [];
-    const unmatchedCalls = new Set<string>();
-    const unmatchedResponses = new Set<string>();
-
-    // First pass: collect all function calls and responses with their IDs
-    for (let i = 0; i < contents.length; i++) {
-      const content = contents[i];
-      for (const part of content.parts) {
-        if ('functionCall' in part) {
-          totalFunctionCalls++;
-          const fc = part as { functionCall: FunctionCall };
-          callsDetail.push(
-            `${i}: ${fc.functionCall.name} (${fc.functionCall.id})`,
-          );
-          if (fc.functionCall.id) {
-            unmatchedCalls.add(fc.functionCall.id);
-          }
-        } else if ('functionResponse' in part) {
-          totalFunctionResponses++;
-          const fr = part as { functionResponse: { id: string; name: string } };
-          responsesDetail.push(
-            `${i}: ${fr.functionResponse.name} (${fr.functionResponse.id})`,
-          );
-          if (fr.functionResponse.id) {
-            unmatchedResponses.add(fr.functionResponse.id);
-          }
-        }
-      }
-    }
-
-    // Second pass: match calls with responses
-    for (const id of unmatchedCalls) {
-      if (unmatchedResponses.has(id)) {
-        unmatchedCalls.delete(id);
-        unmatchedResponses.delete(id);
-      }
-    }
-
-    if (totalFunctionCalls !== totalFunctionResponses) {
-      this.logger.debug(
-        () =>
-          `Function parts count mismatch: ${totalFunctionCalls} calls vs ${totalFunctionResponses} responses`,
-      );
-      this.logger.debug(() => `Function calls: ${JSON.stringify(callsDetail)}`);
-      this.logger.debug(
-        () => `Function responses: ${JSON.stringify(responsesDetail)}`,
-      );
-      this.logger.debug(
-        () =>
-          `Unmatched call IDs: ${JSON.stringify(Array.from(unmatchedCalls))}`,
-      );
-      this.logger.debug(
-        () =>
-          `Unmatched response IDs: ${JSON.stringify(Array.from(unmatchedResponses))}`,
-      );
-
-      // This is now just a warning, not an error, since we've added placeholders
-      // The Gemini API should handle this gracefully
-    }
-
-    return contents;
   }
 
   private convertToolsToGeminiFormat(tools: ITool[]): Array<{
@@ -1016,6 +764,15 @@ export class GeminiProvider extends BaseProvider {
    */
   override getModelParams(): Record<string, unknown> | undefined {
     return this.modelParams;
+  }
+
+  /**
+   * Set temporary system instruction for the next generateChatCompletion call
+   */
+  override setTemporarySystemInstruction(
+    systemInstruction: string | undefined,
+  ): void {
+    this.temporarySystemInstruction = systemInstruction;
   }
 
   /**

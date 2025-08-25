@@ -5,12 +5,12 @@
  */
 
 // Re-export the unified interfaces with backward compatible names
-export type { IMessage as ProviderMessage } from './IMessage.js';
 export type { ITool as ProviderTool } from './ITool.js';
 export type { IProvider as Provider } from './IProvider.js';
 export type { IProviderManager as ProviderManager } from './IProviderManager.js';
+export type { Content as ProviderMessage } from '@google/genai';
 
-// Export the tool call type from IMessage
+// Export the tool call type
 export interface ProviderToolCall {
   id: string;
   type: 'function';

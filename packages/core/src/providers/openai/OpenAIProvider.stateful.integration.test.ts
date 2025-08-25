@@ -8,8 +8,7 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { OpenAIProvider } from './OpenAIProvider.js';
 // ConversationContext is not available in core package
 // import { ConversationContext } from '../../../utils/ConversationContext.js';
-import { IMessage } from '../IMessage.js';
-import { ContentGeneratorRole } from '../ContentGeneratorRole.js';
+import { Content } from '@google/genai';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -42,12 +41,16 @@ describe('OpenAIProvider Stateful Integration', () => {
 
   // Helper function to consume the async iterator and collect content
   async function collectResponse(
-    stream: AsyncIterableIterator<IMessage>,
+    stream: AsyncIterableIterator<Content>,
   ): Promise<string> {
     let fullContent = '';
     for await (const chunk of stream) {
-      if (chunk.content) {
-        fullContent += chunk.content;
+      if (chunk.parts) {
+        for (const part of chunk.parts) {
+          if (part.text) {
+            fullContent += part.text;
+          }
+        }
       }
     }
     return fullContent;
@@ -65,18 +68,18 @@ describe('OpenAIProvider Stateful Integration', () => {
 
       // Turn 1: Establish context
       // ConversationContext.startNewConversation(); // Not available in core
-      const history: IMessage[] = [
+      const history: Content[] = [
         {
-          role: ContentGeneratorRole.USER,
-          content: 'My name is Clara and my favorite color is blue.',
+          role: 'user',
+          parts: [{ text: 'My name is Clara and my favorite color is blue.' }],
         },
       ];
       const response1 = await collectResponse(
         provider.generateChatCompletion(history),
       );
       history.push({
-        role: ContentGeneratorRole.ASSISTANT,
-        content: response1,
+        role: 'model',
+        parts: [{ text: response1 }],
       });
 
       // Assert that parentId was set after the first turn
@@ -88,8 +91,8 @@ describe('OpenAIProvider Stateful Integration', () => {
 
       // Turn 2: Ask a follow-up question
       history.push({
-        role: ContentGeneratorRole.USER,
-        content: 'What is my name?',
+        role: 'user',
+        parts: [{ text: 'What is my name?' }],
       });
       const response2 = await collectResponse(
         provider.generateChatCompletion(history),
@@ -111,18 +114,18 @@ describe('OpenAIProvider Stateful Integration', () => {
       }
       provider.setModel('gpt-3.5-turbo');
 
-      const history: IMessage[] = [
+      const history: Content[] = [
         {
-          role: ContentGeneratorRole.USER,
-          content: 'The secret word is "banana".',
+          role: 'user',
+          parts: [{ text: 'The secret word is "banana".' }],
         },
         {
-          role: ContentGeneratorRole.ASSISTANT,
-          content: 'Okay, I will remember that.',
+          role: 'model',
+          parts: [{ text: 'Okay, I will remember that.' }],
         },
         {
-          role: ContentGeneratorRole.USER,
-          content: 'What is the secret word?',
+          role: 'user',
+          parts: [{ text: 'What is the secret word?' }],
         },
       ];
 
