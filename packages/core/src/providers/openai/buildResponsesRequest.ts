@@ -2,17 +2,22 @@
  * @plan PLAN-20250120-DEBUGLOGGING.P15
  * @requirement REQ-INT-001.1
  */
-import { DebugLogger } from '../../debug/index.js';
-import { IMessage } from '../IMessage.js';
+import { Content } from '@google/genai';
 import { ITool } from '../ITool.js';
-import { ResponsesTool } from '../../tools/IToolFormatter.js';
 import {
-  ensureJsonSafe,
-  hasUnicodeReplacements,
-} from '../../utils/unicodeUtils.js';
+  OpenAIMessage,
+  OpenAIContentConverter,
+} from '../converters/OpenAIContentConverter.js';
+import { ResponsesTool } from '../../tools/IToolFormatter.js';
+import { ensureJsonSafe } from '../../utils/unicodeUtils.js';
+
+// Type to handle both Content format and legacy OpenAI-style format
+type MessageFormat = Content | (OpenAIMessage & { parts?: undefined });
 
 export interface ResponsesRequestParams {
-  messages?: IMessage[];
+  messages?: MessageFormat[];
+  // For internal use - already converted messages
+  _convertedMessages?: OpenAIMessage[];
   prompt?: string;
   tools?: ITool[] | ResponsesTool[];
   stream?: boolean;
@@ -91,9 +96,6 @@ export interface ResponsesRequest {
 const MAX_TOOLS = 16;
 const MAX_JSON_SIZE_KB = 32;
 
-// Create a single logger instance for the module (following singleton pattern)
-const logger = new DebugLogger('llxprt:openai:provider');
-
 export function buildResponsesRequest(
   params: ResponsesRequestParams,
 ): ResponsesRequest {
@@ -106,6 +108,7 @@ export function buildResponsesRequest(
     tool_choice,
     stateful,
     model,
+    _convertedMessages,
     ...otherParams
   } = params;
 
@@ -143,134 +146,129 @@ export function buildResponsesRequest(
     }
   }
 
-  // Handle message trimming for stateful mode
-  let processedMessages = messages;
-  if (messages && conversationId) {
-    // For stateful mode, we need to be smarter about trimming to preserve tool call/response pairs
-    if (messages.length > 2) {
-      // Find the last complete interaction (user message -> assistant response/tool calls -> tool responses -> user message)
-      let startIndex = messages.length - 1;
+  // For now, use all messages - trimming logic will be handled post-conversion
 
-      // Work backwards to find a complete interaction
-      while (startIndex > 0) {
-        const msg = messages[startIndex];
+  // Convert Content[] to OpenAIMessage[] if needed
+  let openAIMessages: OpenAIMessage[] | undefined;
+  if (messages) {
+    // Filter out undefined/null messages first
+    let validMessages = messages.filter((msg) => msg != null);
 
-        // If we find a tool message, we need to include the assistant message with the tool call
-        if (msg.role === 'tool') {
-          // Find the assistant message that contains this tool call
-          for (let i = startIndex - 1; i >= 0; i--) {
-            const prevMsg = messages[i];
-            if (prevMsg.role === 'assistant' && prevMsg.tool_calls) {
-              // Check if this assistant message contains the tool call for our tool response
-              const hasMatchingCall = prevMsg.tool_calls.some(
-                (call) => call.id === msg.tool_call_id,
-              );
-              if (hasMatchingCall) {
-                startIndex = i;
-                break;
-              }
-            }
-          }
+    // Apply message trimming based on context
+    if (parentId && validMessages.length > 0) {
+      // For stateful mode with parent_id, the server already has the conversation history
+      // Find the message that generated the parentId and send only messages after it
+
+      // Find the index of the message with responseId matching parentId
+      const parentIndex = validMessages.findIndex((msg) => {
+        const msgWithMetadata = msg as Content & {
+          metadata?: { responseId?: string };
+        };
+        return msgWithMetadata.metadata?.responseId === parentId;
+      });
+
+      if (parentIndex >= 0) {
+        // Everything after the parent message is new
+        validMessages = validMessages.slice(parentIndex + 1);
+        console.debug(
+          `[buildResponsesRequest] Stateful mode: found parentId at index ${parentIndex}, sending ${validMessages.length} new messages`,
+        );
+      } else {
+        // Parent not found - this might be the first message after getting a parentId
+        // In this case, we should send everything as it's all new
+        console.debug(
+          `[buildResponsesRequest] Stateful mode: parentId not found in messages, sending all ${validMessages.length} messages`,
+        );
+      }
+    } else if (conversationId && validMessages.length > 2) {
+      // When conversationId is present (but no parentId), trim to keep context manageable
+      // Note: conversationId is not sent to Responses API, only used for trimming
+
+      // Find the second-to-last user message
+      const userIndices: number[] = [];
+      for (let i = 0; i < validMessages.length; i++) {
+        if (validMessages[i] && validMessages[i].role === 'user') {
+          userIndices.push(i);
         }
-
-        // If we find a user message after going through tool responses, this is a good starting point
-        if (msg.role === 'user' && startIndex < messages.length - 1) {
-          break;
-        }
-
-        startIndex--;
       }
 
-      // Ensure we don't trim too aggressively
-      startIndex = Math.max(0, Math.min(startIndex, messages.length - 2));
-
-      processedMessages = messages.slice(startIndex);
+      if (userIndices.length >= 2) {
+        // Start from the second-to-last user message
+        const startIndex = userIndices[userIndices.length - 2];
+        validMessages = validMessages.slice(startIndex);
+      }
     }
+
+    // Check if messages are already in OpenAI format (have role/content but no parts)
+    const firstMessage = validMessages[0];
+    const isOpenAIFormat =
+      firstMessage &&
+      'role' in firstMessage &&
+      'content' in firstMessage &&
+      !('parts' in firstMessage);
+
+    if (isOpenAIFormat) {
+      // These are already OpenAI-style messages, cast them directly (filtered)
+      openAIMessages = validMessages as OpenAIMessage[];
+    } else {
+      // These are proper Google Content format, use converter
+      const converter = new OpenAIContentConverter();
+      openAIMessages = converter.toProviderFormat(validMessages as Content[]);
+    }
+  } else if (params._convertedMessages) {
+    // Use already converted messages if available
+    openAIMessages = params._convertedMessages;
   }
 
   // Transform messages for Responses API format
-  let transformedMessages: ResponsesMessage[] | undefined;
-  const functionCallOutputs: FunctionCallOutput[] = [];
-  const functionCalls: FunctionCall[] = [];
+  const transformedMessages: ResponsesMessage[] = [];
 
-  if (processedMessages) {
-    // First, extract function calls from assistant messages and function call outputs from tool messages
-    processedMessages
-      .filter((msg): msg is IMessage => msg !== undefined && msg !== null)
-      .forEach((msg) => {
-        // Extract function calls from assistant messages
-        if (msg.role === 'assistant' && msg.tool_calls) {
-          msg.tool_calls.forEach((toolCall) => {
+  if (openAIMessages) {
+    // Build input array in conversational order
+    for (let i = 0; i < openAIMessages.length; i++) {
+      const msg = openAIMessages[i];
+
+      if (!msg) continue;
+
+      // Handle different message types in order
+      if (msg.role === 'assistant') {
+        // Always add assistant message (Responses API requires content field to exist)
+        transformedMessages.push({
+          role: 'assistant',
+          content: ensureJsonSafe(msg.content || ''),
+          ...(msg.usage ? { usage: msg.usage } : {}),
+        });
+
+        // Add function calls immediately after assistant message
+        if (msg.tool_calls) {
+          for (const toolCall of msg.tool_calls) {
             if (toolCall.type === 'function') {
-              functionCalls.push({
+              transformedMessages.push({
                 type: 'function_call' as const,
                 call_id: toolCall.id,
                 name: toolCall.function.name,
-                arguments: toolCall.function.arguments,
+                arguments: ensureJsonSafe(toolCall.function.arguments), // Apply sanitization
               });
             }
-          });
-        }
-
-        // Extract function call outputs from tool messages
-        if (msg.role === 'tool' && msg.tool_call_id && msg.content) {
-          // Sanitize content to ensure it's safe for JSON/API transmission
-          let sanitizedContent = msg.content;
-          if (hasUnicodeReplacements(msg.content)) {
-            logger.debug(
-              () =>
-                'Tool output contains Unicode replacement characters (U+FFFD), sanitizing...',
-            );
-            sanitizedContent = ensureJsonSafe(msg.content);
           }
-
-          functionCallOutputs.push({
+        }
+      } else if (msg.role === 'tool') {
+        // Add function output in order
+        if (msg.tool_call_id && msg.content) {
+          transformedMessages.push({
             type: 'function_call_output' as const,
             call_id: msg.tool_call_id,
-            output: sanitizedContent,
+            output: ensureJsonSafe(msg.content),
           });
         }
-      });
-
-    // Then, create the regular messages array (excluding tool messages)
-    transformedMessages = processedMessages
-      .filter((msg): msg is IMessage => msg !== undefined && msg !== null)
-      .filter((msg) => msg.role !== 'tool') // Exclude tool messages
-      .map((msg) => {
-        // Remove tool_calls field as it's not accepted by Responses API
-        const {
-          tool_calls: _tool_calls,
-          tool_call_id: _tool_call_id,
-          usage,
-          ...cleanMsg
-        } = msg;
-
-        // Ensure role is valid for Responses API
-        const validRole = cleanMsg.role as
-          | 'user'
-          | 'assistant'
-          | 'system'
-          | 'developer';
-
-        // Sanitize content for safe API transmission
-        let sanitizedContent = cleanMsg.content;
-        if (cleanMsg.content && hasUnicodeReplacements(cleanMsg.content)) {
-          logger.debug(
-            () =>
-              'Message content contains Unicode replacement characters (U+FFFD), sanitizing...',
-          );
-          sanitizedContent = ensureJsonSafe(cleanMsg.content || '');
-        }
-
-        return {
-          role: validRole,
-          content: sanitizedContent,
-          ...(usage ? { usage } : {}), // Preserve usage data if present
-        };
-      })
-      .filter(
-        (msg): msg is NonNullable<typeof msg> => msg !== null,
-      ) as ResponsesMessage[];
+      } else if (msg.role === 'user' || msg.role === 'system') {
+        // Add user/system messages in order
+        transformedMessages.push({
+          role: msg.role,
+          content: ensureJsonSafe(msg.content || ''),
+        });
+      }
+    }
   }
 
   // Build the request object with conditional fields
@@ -280,41 +278,16 @@ export function buildResponsesRequest(
     ...(prompt ? { prompt } : {}),
   };
 
-  // Add input array if we have messages, function calls, or function call outputs
-  if (
-    transformedMessages ||
-    functionCalls.length > 0 ||
-    functionCallOutputs.length > 0
-  ) {
-    const inputItems: ResponsesMessage[] = [];
-
-    // Add regular messages
-    if (transformedMessages) {
-      inputItems.push(...transformedMessages);
-    }
-
-    // Add function calls
-    if (functionCalls.length > 0) {
-      inputItems.push(...functionCalls);
-    }
-
-    // Add function call outputs
-    if (functionCallOutputs.length > 0) {
-      inputItems.push(...functionCallOutputs);
-    }
-    request.input = inputItems;
+  // Only include input field if we have messages (not for prompt-only requests)
+  if (!prompt && transformedMessages.length >= 0) {
+    request.input = transformedMessages;
   }
 
-  // Map conversation fields
-  if (model) {
-    if (conversationId) {
-      // Note: The API uses previous_response_id, not a conversation_id.
-      // We are mapping our internal parentId to this field.
-      if (parentId) {
-        request.previous_response_id = parentId;
-        request.store = true;
-      }
-    }
+  // Map conversation fields for stateful mode
+  // Note: conversationId is not used by Responses API (can't be passed)
+  if (parentId) {
+    request.store = true; // Store this response for future continuation
+    request.previous_response_id = parentId;
   }
 
   // Add tools if provided

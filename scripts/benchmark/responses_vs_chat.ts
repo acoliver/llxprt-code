@@ -8,7 +8,7 @@
  */
 
 import { OpenAIProvider } from '../../packages/cli/src/providers/openai/OpenAIProvider.js';
-import { IMessage } from '../../packages/cli/src/providers/IMessage.js';
+import { Content } from '@google/genai';
 
 interface BenchmarkResult {
   apiType: string;
@@ -21,7 +21,7 @@ interface BenchmarkResult {
 
 async function benchmarkAPI(
   provider: OpenAIProvider,
-  messages: IMessage[],
+  messages: Content[],
   apiType: 'responses' | 'legacy',
 ): Promise<BenchmarkResult> {
   const startTime = Date.now();
@@ -63,7 +63,7 @@ async function runBenchmark() {
     process.exit(1);
   }
 
-  const testMessages: IMessage[] = [
+  const testMessages: Content[] = [
     {
       role: 'user',
       content:

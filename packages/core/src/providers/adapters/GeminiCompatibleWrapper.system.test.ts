@@ -83,6 +83,9 @@ describe('GeminiCompatibleWrapper System Message Handling', () => {
     // Gemini should NOT receive system role content (it throws an error)
     expect(mockGeminiProvider.generateChatCompletion).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ role: 'user' })]),
+      undefined, // tools
+      undefined, // toolFormat
+      undefined, // sessionId
     );
 
     const callArgs = (
@@ -113,6 +116,9 @@ describe('GeminiCompatibleWrapper System Message Handling', () => {
     // OpenAI should only receive user message (system handled by converter)
     expect(mockOpenAIProvider.generateChatCompletion).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ role: 'user' })]),
+      undefined, // tools
+      undefined, // toolFormat
+      undefined, // sessionId
     );
 
     const callArgs = (
@@ -138,6 +144,9 @@ describe('GeminiCompatibleWrapper System Message Handling', () => {
     // Anthropic should only receive user message (system handled by converter)
     expect(mockAnthropicProvider.generateChatCompletion).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ role: 'user' })]),
+      undefined, // tools
+      undefined, // toolFormat
+      undefined, // sessionId
     );
 
     const callArgs = (

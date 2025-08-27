@@ -8,6 +8,7 @@ import {
   ContentGenerator,
   ContentGeneratorConfig,
 } from '../core/contentGenerator.js';
+import type { Config } from '../config/config.js';
 import {
   GenerateContentParameters,
   GenerateContentResponse,
@@ -28,6 +29,7 @@ export class ProviderContentGenerator implements ContentGenerator {
   constructor(
     private providerManager: ProviderManager,
     private _config: ContentGeneratorConfig,
+    private config?: Config,
   ) {
     // Config parameter is reserved for future use
     void this._config;
@@ -44,13 +46,21 @@ export class ProviderContentGenerator implements ContentGenerator {
   async generateContent(
     request: GenerateContentParameters,
   ): Promise<GenerateContentResponse> {
-    return this.getWrapper().generateContent(request);
+    const sessionId = this.config?.getSessionId?.();
+    return this.getWrapper().generateContent({
+      ...request,
+      sessionId,
+    });
   }
 
   async generateContentStream(
     request: GenerateContentParameters,
   ): Promise<AsyncGenerator<GenerateContentResponse>> {
-    return this.getWrapper().generateContentStream(request);
+    const sessionId = this.config?.getSessionId?.();
+    return this.getWrapper().generateContentStream({
+      ...request,
+      sessionId,
+    });
   }
 
   async countTokens(

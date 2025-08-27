@@ -216,11 +216,16 @@ export class LoggingProviderWrapper implements IProvider {
     return this.wrapped.getDefaultModel();
   }
 
+  /**
+   * @plan PLAN-20250826-RESPONSES.P05
+   * @requirement REQ-001.1
+   */
   // Only method that includes logging - everything else is passthrough
   async *generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
     toolFormat?: string,
+    sessionId?: string, // NEW optional parameter
   ): AsyncIterableIterator<Content> {
     const promptId = this.generatePromptId();
     this.turnNumber++;
@@ -230,11 +235,16 @@ export class LoggingProviderWrapper implements IProvider {
       await this.logRequest(contents, tools, toolFormat, promptId);
     }
 
+    /**
+     * @plan PLAN-20250826-RESPONSES.P05
+     * @requirement REQ-001.2
+     */
     // Get stream from wrapped provider
     const stream = this.wrapped.generateChatCompletion(
       contents,
       tools,
       toolFormat,
+      sessionId, // Pass through sessionId parameter
     );
 
     // If logging not enabled, just pass through

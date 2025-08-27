@@ -22,10 +22,15 @@ export interface IProvider {
   name: string;
   isDefault?: boolean;
   getModels(): Promise<IModel[]>;
+  /**
+   * @plan PLAN-20250826-RESPONSES.P05
+   * @requirement REQ-001.1
+   */
   generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
     toolFormat?: string,
+    sessionId?: string, // NEW optional parameter
   ): AsyncIterableIterator<Content>;
   setModel?(modelId: string): void;
   getCurrentModel?(): string;

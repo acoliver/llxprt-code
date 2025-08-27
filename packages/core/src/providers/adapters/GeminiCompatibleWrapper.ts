@@ -250,6 +250,7 @@ export class GeminiCompatibleWrapper {
     model: string;
     contents: ContentListUnion;
     config?: GenerateContentConfig;
+    sessionId?: string;
   }): Promise<GenerateContentResponse> {
     // Convert ContentListUnion to Content[] format
     let contents: Content[];
@@ -331,9 +332,18 @@ export class GeminiCompatibleWrapper {
       contents = this.fixOrphanedToolCallsAndResponses(contents);
     }
 
+    /**
+     * @plan PLAN-20250826-RESPONSES.P05
+     * @requirement REQ-001.2
+     */
     // Collect full response from provider stream using Content[] directly
     const responseContents: Content[] = [];
-    const stream = this.provider.generateChatCompletion(contents);
+    const stream = this.provider.generateChatCompletion(
+      contents,
+      undefined, // tools
+      undefined, // toolFormat
+      params.sessionId, // sessionId - now implemented
+    );
 
     for await (const chunk of stream) {
       responseContents.push(chunk);
@@ -518,6 +528,7 @@ export class GeminiCompatibleWrapper {
     model: string;
     contents: ContentListUnion;
     config?: GenerateContentConfig;
+    sessionId?: string;
   }): AsyncGenerator<GenerateContentResponse> {
     this.logger.debug(() => '[WRAPPER] generateContentStream called');
     this.logger.debug(() => `[WRAPPER] Provider type: ${this.provider.name}`);
@@ -648,10 +659,16 @@ export class GeminiCompatibleWrapper {
       providerTools = this.convertGeminiToolsToProviderTools(geminiTools);
     }
 
+    /**
+     * @plan PLAN-20250826-RESPONSES.P05
+     * @requirement REQ-001.2
+     */
     // Stream from provider using Content[] directly - no conversion needed!
     const stream = this.provider.generateChatCompletion(
       contents,
       providerTools,
+      undefined, // toolFormat
+      params.sessionId, // sessionId - now implemented
     );
 
     // Collect all chunks to batch telemetry events

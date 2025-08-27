@@ -5,170 +5,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import {
-  IMessage,
-  ITool,
-  ContentGeneratorRole,
-} from '@vybestack/llxprt-code-core';
+import { ITool } from '@vybestack/llxprt-code-core';
+import { Content } from '@google/genai';
 import { ConversationDataRedactor } from './ConversationDataRedactor.js';
-
-// Note: Interface will be implemented in the next phase
-// Removed unused interface ConversationDataRedactorInterface
-
-// Mock implementation for behavioral testing (unused in current tests)
-// class MockConversationDataRedactor
-//   implements ConversationDataRedactorInterface
-// {
-//   redactMessage(message: IMessage, provider: string): IMessage {
-//     const redactedContent = this.redactApiKeys(message.content, provider);
-//     const finalContent = this.redactSensitivePaths(redactedContent);
-//
-//     return {
-//       ...message,
-//       content: finalContent,
-//       tool_calls: message.tool_calls?.map((call) => ({
-//         ...call,
-//         function: {
-//           ...call.function,
-//           arguments: this.redactSensitivePaths(call.function.arguments),
-//         },
-//       })),
-//     };
-//   }
-//
-//   redactToolCall(tool: ITool): ITool {
-//     if (!tool.function.parameters || typeof tool.function.parameters !== 'object') {
-//       return tool;
-//     }
-//
-//     const redactedParams = { ...tool.function.parameters };
-//
-//     // Redact sensitive file paths
-//     if (
-//       redactedParams.file_path &&
-//       typeof redactedParams.file_path === 'string'
-//     ) {
-//       const path = redactedParams.file_path;
-//       if (path.includes('.ssh') && path.includes('id_rsa')) {
-//         redactedParams.file_path = '[REDACTED-SSH-KEY-PATH]';
-//       } else if (
-//         path.includes('.env') ||
-//         path.includes('secret') ||
-//         path.includes('key')
-//       ) {
-//         redactedParams.file_path = '[REDACTED-SENSITIVE-PATH]';
-//       }
-//     }
-//
-//     // Redact API keys in any parameter
-//     Object.keys(redactedParams).forEach((key) => {
-//       if (typeof redactedParams[key] === 'string') {
-//         redactedParams[key] = this.redactApiKeys(
-//           redactedParams[key] as string,
-//           'unknown',
-//         );
-//       }
-//     });
-//
-//     return {
-//       ...tool,
-//       function: {
-//         ...tool.function,
-//         parameters: redactedParams,
-//       },
-//     };
-//   }
-//
-//   redactConversation(messages: IMessage[], _provider: string): IMessage[] {
-//     return messages.map((message) => this.redactMessage(message, _provider));
-//   }
-//
-//   redactApiKeys(content: string, _provider: string): string {
-//     let redacted = content;
-//
-//     // OpenAI keys
-//     redacted = redacted.replace(/sk-[a-zA-Z0-9]{48}/g, '[REDACTED-OPENAI-KEY]');
-//     redacted = redacted.replace(
-//       /sk-proj-[a-zA-Z0-9]{48}/g,
-//       '[REDACTED-OPENAI-PROJECT-KEY]',
-//     );
-//
-//     // Anthropic keys
-//     redacted = redacted.replace(
-//       /sk-ant-[a-zA-Z0-9-]{95}/g,
-//       '[REDACTED-ANTHROPIC-KEY]',
-//     );
-//
-//     // Google/Gemini keys
-//     redacted = redacted.replace(
-//       /AIza[a-zA-Z0-9_-]{35}/g,
-//       '[REDACTED-GOOGLE-KEY]',
-//     );
-//
-//     // Generic API key patterns
-//     redacted = redacted.replace(
-//       /api[_-]?key["\s]*[:=]["\s]*[a-zA-Z0-9-_]{16,}/gi,
-//       'api_key: "[REDACTED-API-KEY]"',
-//     );
-//     redacted = redacted.replace(
-//       /bearer [a-zA-Z0-9-_.]{16,}/gi,
-//       'bearer [REDACTED-BEARER-TOKEN]',
-//     );
-//
-//     return redacted;
-//   }
-//
-//   redactSensitivePaths(content: string): string {
-//     let redacted = content;
-//
-//     // SSH keys and certificates
-//     redacted = redacted.replace(
-//       /\/[^"\s]*\.ssh\/[^"\s]*/g,
-//       '[REDACTED-SSH-PATH]',
-//     );
-//     redacted = redacted.replace(
-//       /\/[^"\s]*\/id_rsa[^"\s]*/g,
-//       '[REDACTED-SSH-KEY-PATH]',
-//     );
-//
-//     // Environment files
-//     redacted = redacted.replace(
-//       /\/[^"\s]*\.env[^"\s]*/g,
-//       '[REDACTED-ENV-FILE]',
-//     );
-//
-//     // Configuration directories
-//     redacted = redacted.replace(/\/home\/[^/\s"]+/g, '[REDACTED-HOME-DIR]');
-//     redacted = redacted.replace(/\/Users\/[^/\s"]+/g, '[REDACTED-USER-DIR]');
-//
-//     return redacted;
-//   }
-//
-//   redactPersonalInfo(content: string): string {
-//     let redacted = content;
-//
-//     // Email addresses
-//     redacted = redacted.replace(
-//       /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-//       '[REDACTED-EMAIL]',
-//     );
-//
-//     // Phone numbers (basic patterns)
-//     redacted = redacted.replace(/\b\d{3}-\d{3}-\d{4}\b/g, '[REDACTED-PHONE]');
-//     redacted = redacted.replace(
-//       /\b\(\d{3}\)\s?\d{3}-\d{4}\b/g,
-//       '[REDACTED-PHONE]',
-//     );
-//
-//     // Credit card numbers (basic pattern)
-//     redacted = redacted.replace(
-//       /\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b/g,
-//       '[REDACTED-CC-NUMBER]',
-//     );
-//
-//     return redacted;
-//   }
-// }
 
 describe('Conversation Data Redaction', () => {
   let redactor: ConversationDataRedactor;
@@ -219,11 +58,14 @@ describe('Conversation Data Redaction', () => {
     ];
 
     testCases.forEach(({ content, provider, expected }) => {
-      const message: IMessage = { role: ContentGeneratorRole.USER, content };
+      const message: Content = {
+        role: 'user',
+        parts: [{ text: content }],
+      };
       const redacted = redactor.redactMessage(message, provider);
 
-      expect(redacted.content).toContain(expected);
-      expect(redacted.content).not.toContain(content.split(': ')[1]);
+      expect(redacted.parts?.[0]?.text).toContain(expected);
+      expect(redacted.parts?.[0]?.text).not.toContain(content.split(': ')[1]);
     });
   });
 
@@ -286,83 +128,82 @@ describe('Conversation Data Redaction', () => {
   });
 
   /**
-   * @requirement REDACTION-004: Message tool_calls redaction
-   * @scenario Message with tool_calls containing sensitive data
-   * @given IMessage with tool_calls containing API keys in arguments
+   * @requirement REDACTION-004: Message functionCall redaction
+   * @scenario Message with functionCall containing sensitive data
+   * @given Content with parts containing functionCall with API keys in args
    * @when redactMessage() is called
-   * @then API keys in tool call arguments are redacted
+   * @then API keys in function call args are redacted
    */
-  it('should redact sensitive data from message tool calls', () => {
-    const message: IMessage = {
-      role: ContentGeneratorRole.ASSISTANT,
-      content: 'I will use your API key to make the request',
-      tool_calls: [
+  it('should redact sensitive data from message function calls', () => {
+    const message: Content = {
+      role: 'model',
+      parts: [
+        { text: 'I will use your API key to make the request' },
         {
-          id: 'call_1',
-          type: 'function',
-          function: {
+          functionCall: {
+            id: 'call_1',
             name: 'api_request',
-            arguments: JSON.stringify({
+            args: {
               api_key: 'sk-1234567890abcdef1234567890abcdef12345678',
               endpoint: 'https://api.openai.com/v1/chat/completions',
-            }),
+            },
           },
         },
       ],
     };
 
     const redacted = redactor.redactMessage(message, 'openai');
-    const args = JSON.parse(redacted.tool_calls![0].function.arguments);
+    const functionCallPart = redacted.parts?.find((p) => 'functionCall' in p);
+    const args = functionCallPart?.functionCall?.args;
 
-    expect(args.api_key).toBe('[REDACTED-OPENAI-KEY]'); // Should be redacted in arguments
-    expect(redacted.tool_calls![0].function.arguments).toContain(
-      '[REDACTED-OPENAI-KEY]',
-    );
-    expect(args.endpoint).toBe('https://api.openai.com/v1/chat/completions'); // Non-sensitive preserved
+    expect(args?.api_key).toBe('[REDACTED-OPENAI-KEY]'); // Should be redacted in arguments
+    expect(args?.endpoint).toBe('https://api.openai.com/v1/chat/completions'); // Non-sensitive preserved
   });
 
   /**
    * @requirement REDACTION-005: Conversation-level redaction
    * @scenario Multiple messages with various sensitive data
-   * @given Array of IMessage objects with mixed sensitive content
+   * @given Array of Content objects with mixed sensitive content
    * @when redactConversation() is called
    * @then All messages are redacted consistently
    */
   it('should redact entire conversation consistently', () => {
-    const messages: IMessage[] = [
+    const messages: Content[] = [
       {
-        role: ContentGeneratorRole.USER,
-        content: 'My API key is sk-1234567890abcdef1234567890abcdef12345678',
+        role: 'user',
+        parts: [
+          { text: 'My API key is sk-1234567890abcdef1234567890abcdef12345678' },
+        ],
       },
       {
-        role: ContentGeneratorRole.ASSISTANT,
-        content: 'I cannot store API keys for security reasons',
+        role: 'model',
+        parts: [{ text: 'I cannot store API keys for security reasons' }],
       },
       {
-        role: ContentGeneratorRole.USER,
-        content: 'Please read /home/john/.ssh/id_rsa for me',
+        role: 'user',
+        parts: [{ text: 'Please read /home/john/.ssh/id_rsa for me' }],
       },
       {
-        role: ContentGeneratorRole.ASSISTANT,
-        content: 'I cannot access SSH keys or other sensitive files',
+        role: 'model',
+        parts: [{ text: 'I cannot access SSH keys or other sensitive files' }],
       },
     ];
 
     const redacted = redactor.redactConversation(messages, 'openai');
 
     expect(redacted).toHaveLength(4);
-    expect(redacted[0].content).toContain('[REDACTED-OPENAI-KEY]');
-    expect(redacted[0].content).not.toContain(
+    expect(redacted[0].parts?.[0]?.text).toContain('[REDACTED-OPENAI-KEY]');
+    expect(redacted[0].parts?.[0]?.text).not.toContain(
       'sk-1234567890abcdef1234567890abcdef12345678',
     );
-    expect(redacted[1].content).toBe(
+    expect(redacted[1].parts?.[0]?.text).toBe(
       'I cannot store API keys for security reasons',
     ); // Unchanged
     // File paths are not redacted by default since redactFilePaths is false
-    expect(redacted[2].content).toBe(
+    expect(redacted[2].parts?.[0]?.text).toBe(
       'Please read /home/john/.ssh/id_rsa for me',
     );
-    expect(redacted[3].content).toBe(
+    expect(redacted[3].parts?.[0]?.text).toBe(
       'I cannot access SSH keys or other sensitive files',
     ); // Unchanged
   });
@@ -384,13 +225,18 @@ describe('Conversation Data Redaction', () => {
     ];
 
     testCases.forEach((content) => {
-      const message: IMessage = { role: ContentGeneratorRole.USER, content };
+      const message: Content = {
+        role: 'user',
+        parts: [{ text: content }],
+      };
       const redacted = redactor.redactMessage(message, 'unknown');
 
-      expect(redacted.content).toMatch(/\[REDACTED-(API-KEY|BEARER-TOKEN)\]/);
-      expect(redacted.content).not.toContain('abc123');
-      expect(redacted.content).not.toContain('xyz789');
-      expect(redacted.content).not.toContain('token_1234567890abcdef');
+      expect(redacted.parts?.[0]?.text).toMatch(
+        /\[REDACTED-(API-KEY|BEARER-TOKEN)\]/,
+      );
+      expect(redacted.parts?.[0]?.text).not.toContain('abc123');
+      expect(redacted.parts?.[0]?.text).not.toContain('xyz789');
+      expect(redacted.parts?.[0]?.text).not.toContain('token_1234567890abcdef');
     });
   });
 
@@ -402,10 +248,13 @@ describe('Conversation Data Redaction', () => {
    * @then Sensitive paths are redacted with appropriate placeholders
    */
   it('should redact sensitive file paths', () => {
-    const message: IMessage = {
-      role: ContentGeneratorRole.USER,
-      content:
-        'Read these files: /home/alice/.ssh/id_rsa, /Users/bob/.env, /home/charlie/secrets/key.pem',
+    const message: Content = {
+      role: 'user',
+      parts: [
+        {
+          text: 'Read these files: /home/alice/.ssh/id_rsa, /Users/bob/.env, /home/charlie/secrets/key.pem',
+        },
+      ],
     };
 
     const redacted = redactor.redactMessage(message, 'openai');
@@ -413,7 +262,7 @@ describe('Conversation Data Redaction', () => {
     // File path redaction in message content is not currently implemented in the main redaction flow
     // The redactSensitivePaths method exists but is not called from redactContent
     // File path redaction currently only works in tool parameters, not general message content
-    expect(redacted.content).toBe(
+    expect(redacted.parts?.[0]?.text).toBe(
       'Read these files: /home/alice/.ssh/id_rsa, /Users/bob/.env, /home/charlie/secrets/key.pem',
     );
   });
@@ -426,61 +275,55 @@ describe('Conversation Data Redaction', () => {
    * @then Personal information is redacted while preserving message structure
    */
   it('should redact personal identifiable information', () => {
-    const message: IMessage = {
-      role: ContentGeneratorRole.USER,
-      content:
-        'Contact me at john.doe@example.com or call 555-123-4567. My card is 4111-1111-1111-1111.',
+    const message: Content = {
+      role: 'user',
+      parts: [
+        {
+          text: 'Contact me at john.doe@example.com or call 555-123-4567. My card is 4111-1111-1111-1111.',
+        },
+      ],
     };
 
     const redacted = redactor.redactMessage(message, 'openai');
 
     // Email redaction works via the global patterns
-    expect(redacted.content).toContain('[REDACTED-EMAIL]');
-    expect(redacted.content).not.toContain('john.doe@example.com');
+    expect(redacted.parts?.[0]?.text).toContain('[REDACTED-EMAIL]');
+    expect(redacted.parts?.[0]?.text).not.toContain('john.doe@example.com');
 
     // Phone and credit card numbers are handled by the redactPersonalInfo method
     // but this method is not called from the main redactContent flow
     // So phone numbers and credit cards are not currently redacted in message content
-    expect(redacted.content).toContain('555-123-4567'); // Not redacted
-    expect(redacted.content).toContain('4111-1111-1111-1111'); // Not redacted
+    expect(redacted.parts?.[0]?.text).toContain('555-123-4567'); // Not redacted
+    expect(redacted.parts?.[0]?.text).toContain('4111-1111-1111-1111'); // Not redacted
   });
 
   /**
    * @requirement REDACTION-009: Preserve message structure
-   * @scenario Complex message with multiple fields
-   * @given IMessage with id, role, content, and tool_calls
+   * @scenario Complex message with multiple parts
+   * @given Content with role and parts containing sensitive content
    * @when redactMessage() is called
    * @then All non-sensitive fields are preserved exactly
    * @and Only sensitive content is redacted
    */
   it('should preserve message structure while redacting content', () => {
-    const originalMessage: IMessage = {
-      id: 'msg_123',
-      role: ContentGeneratorRole.USER,
-      content: 'Use API key sk-1234567890abcdef1234567890abcdef12345678',
-      tool_call_id: 'call_456',
-      name: 'api_call',
-      usage: {
-        prompt_tokens: 50,
-        completion_tokens: 30,
-        total_tokens: 80,
-      },
+    const originalMessage: Content = {
+      role: 'user',
+      parts: [
+        { text: 'Use API key sk-1234567890abcdef1234567890abcdef12345678' },
+        { text: 'This is additional content that should remain unchanged' },
+      ],
     };
 
     const redacted = redactor.redactMessage(originalMessage, 'openai');
 
-    expect(redacted.id).toBe('msg_123');
-    expect(redacted.role).toBe(ContentGeneratorRole.USER);
-    expect(redacted.tool_call_id).toBe('call_456');
-    expect(redacted.name).toBe('api_call');
-    expect(redacted.usage).toEqual({
-      prompt_tokens: 50,
-      completion_tokens: 30,
-      total_tokens: 80,
-    });
-    expect(redacted.content).toContain('[REDACTED-OPENAI-KEY]');
-    expect(redacted.content).not.toContain(
+    expect(redacted.role).toBe('user');
+    expect(redacted.parts).toHaveLength(2);
+    expect(redacted.parts?.[0]?.text).toContain('[REDACTED-OPENAI-KEY]');
+    expect(redacted.parts?.[0]?.text).not.toContain(
       'sk-1234567890abcdef1234567890abcdef12345678',
+    );
+    expect(redacted.parts?.[1]?.text).toBe(
+      'This is additional content that should remain unchanged',
     );
   });
 
@@ -492,14 +335,14 @@ describe('Conversation Data Redaction', () => {
    * @then No errors are thrown and empty values are preserved
    */
   it('should handle empty and undefined values gracefully', () => {
-    const emptyMessage: IMessage = {
-      role: ContentGeneratorRole.USER,
-      content: '',
+    const emptyMessage: Content = {
+      role: 'user',
+      parts: [{ text: '' }],
     };
 
-    const undefinedMessage: IMessage = {
-      role: ContentGeneratorRole.ASSISTANT,
-      content: 'Normal content',
+    const undefinedMessage: Content = {
+      role: 'model',
+      parts: [{ text: 'Normal content' }],
       // Other fields intentionally undefined
     };
 
@@ -520,13 +363,13 @@ describe('Conversation Data Redaction', () => {
     expect(() => redactor.redactToolCall(emptyTool)).not.toThrow();
 
     const redactedEmpty = redactor.redactMessage(emptyMessage, 'openai');
-    expect(redactedEmpty.content).toBe('');
+    expect(redactedEmpty.parts?.[0]?.text).toBe('');
 
     const redactedUndefined = redactor.redactMessage(
       undefinedMessage,
       'gemini',
     );
-    expect(redactedUndefined.content).toBe('Normal content');
+    expect(redactedUndefined.parts?.[0]?.text).toBe('Normal content');
 
     const redactedEmptyTool = redactor.redactToolCall(emptyTool);
     expect(redactedEmptyTool.function.name).toBe('empty_tool');

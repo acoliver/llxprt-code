@@ -1,4 +1,4 @@
-import { IMessage } from '../IMessage.js';
+import { Content } from '@google/genai';
 import { ConversationCache } from './ConversationCache.js';
 
 // Model context size configuration
@@ -72,26 +72,33 @@ export function estimateRemoteTokens(
 }
 
 /**
- * Estimates tokens for a message array (rough approximation)
- * @param messages Array of messages
+ * Estimates tokens for a content array (rough approximation)
+ * @param contents Array of content objects
  * @returns Estimated token count
  */
-export function estimateMessagesTokens(messages: IMessage[]): number {
+export function estimateMessagesTokens(contents: Content[]): number {
   // Rough estimation: ~4 characters per token
   let totalChars = 0;
 
-  for (const message of messages) {
+  for (const content of contents) {
     // Add role tokens (usually 1-2 tokens)
     totalChars += 8;
 
-    // Add content
-    if (message.content) {
-      totalChars += message.content.length;
-    }
-
-    // Add tool calls overhead
-    if (message.tool_calls) {
-      totalChars += JSON.stringify(message.tool_calls).length;
+    // Add content from parts
+    if (content.parts) {
+      for (const part of content.parts) {
+        if (part.text) {
+          totalChars += part.text.length;
+        }
+        // Add function call overhead
+        if (part.functionCall) {
+          totalChars += JSON.stringify(part.functionCall).length;
+        }
+        // Add function response overhead
+        if (part.functionResponse) {
+          totalChars += JSON.stringify(part.functionResponse).length;
+        }
+      }
     }
   }
 

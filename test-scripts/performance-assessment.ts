@@ -11,7 +11,8 @@
  * Measures overhead across different scenarios and providers
  */
 
-import type { IProvider, IMessage } from '@vybestack/llxprt-code-core';
+import type { IProvider } from '@vybestack/llxprt-code-core';
+import type { Content } from '@google/genai';
 import { performance } from 'perf_hooks';
 
 interface PerformanceResult {
@@ -151,7 +152,7 @@ export class PerformanceAssessment {
   }
 
   private async runSingleTest(provider: MockProvider): Promise<number> {
-    const messages: IMessage[] = [
+    const messages: Content[] = [
       { role: 'user', content: 'Test message for performance measurement' },
     ];
 

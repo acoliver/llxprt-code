@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { IMessage, ContentGeneratorRole } from '../../index.js';
+import { Content } from '@google/genai';
 import { DebugLogger } from '../../debug/DebugLogger.js';
 
 /**
@@ -36,39 +36,43 @@ export class SyntheticToolResponseHandler {
    */
   static createSyntheticResponses(
     cancelledTools: CancelledToolInfo[],
-  ): IMessage[] {
-    return cancelledTools.map(
-      (tool) =>
-        ({
-          role: 'tool' as const,
-          tool_call_id: tool.toolCallId,
-          // Use simpler content format for better compatibility with strict providers
-          // Fireworks and Cerebras may reject complex JSON structures
-          content: 'Tool execution cancelled by user',
-          // Mark as synthetic for debugging/filtering
-          _synthetic: true,
-          _cancelled: true,
-        }) as IMessage,
-    );
+  ): Content[] {
+    return cancelledTools.map((tool) => ({
+      role: 'user' as const,
+      parts: [
+        {
+          functionResponse: {
+            id: tool.toolCallId,
+            name: tool.toolName || 'unknown',
+            response: {
+              error: 'Tool execution cancelled by user',
+            },
+          },
+        },
+      ],
+      // Mark as synthetic for debugging/filtering
+      _synthetic: true,
+      _cancelled: true,
+    })) as Content[];
   }
 
   /**
    * Identifies tool calls that need synthetic responses by comparing
-   * assistant messages with tool_calls against existing tool responses
+   * model messages with functionCall parts against existing functionResponse parts
    * @param messages The conversation history
    * @returns Array of tool call IDs that need synthetic responses
    */
-  static identifyMissingToolResponses(messages: IMessage[]): string[] {
+  static identifyMissingToolResponses(messages: Content[]): string[] {
     const toolCallIds = new Set<string>();
     const toolResponseIds = new Set<string>();
     const syntheticResponseIds = new Set<string>();
 
-    // Collect all tool call IDs from assistant messages
+    // Collect all tool call IDs from model messages
     messages.forEach((msg) => {
-      if (msg.role === 'assistant' && msg.tool_calls) {
-        msg.tool_calls.forEach((toolCall) => {
-          if (toolCall.id) {
-            toolCallIds.add(toolCall.id);
+      if (msg.role === 'model' && msg.parts) {
+        msg.parts.forEach((part) => {
+          if ('functionCall' in part && part.functionCall?.id) {
+            toolCallIds.add(part.functionCall.id);
           }
         });
       }
@@ -76,16 +80,25 @@ export class SyntheticToolResponseHandler {
 
     // Collect all tool response IDs (including synthetic ones)
     messages.forEach((msg) => {
-      if (msg.role === 'tool' && msg.tool_call_id) {
-        toolResponseIds.add(msg.tool_call_id);
+      if (msg.role === 'user' && msg.parts) {
+        msg.parts.forEach((part) => {
+          if ('functionResponse' in part && part.functionResponse) {
+            const responseId = (part.functionResponse as { id?: string }).id;
+            if (responseId) {
+              toolResponseIds.add(responseId);
 
-        // Track synthetic responses separately for debugging
-        if (
-          (msg as IMessage & { _synthetic?: boolean })._synthetic ||
-          msg.content === 'Tool execution cancelled by user'
-        ) {
-          syntheticResponseIds.add(msg.tool_call_id);
-        }
+              // Track synthetic responses separately for debugging
+              if (
+                (msg as Content & { _synthetic?: boolean })._synthetic ||
+                (typeof part.functionResponse.response === 'object' &&
+                  part.functionResponse.response?.error ===
+                    'Tool execution cancelled by user')
+              ) {
+                syntheticResponseIds.add(responseId);
+              }
+            }
+          }
+        });
       }
     });
 
@@ -114,60 +127,66 @@ export class SyntheticToolResponseHandler {
    * @param messages The original message history
    * @returns Patched message history with synthetic responses added
    */
-  static patchMessageHistory(messages: IMessage[]): IMessage[] {
+  static patchMessageHistory(messages: Content[]): Content[] {
     logger.debug(
       () => `patchMessageHistory called with ${messages.length} messages`,
     );
     logger.debug(
       () =>
-        `Message roles: ${messages.map((m) => `${m.role}${m.tool_calls ? `(${m.tool_calls.length} tools)` : ''}${m.tool_call_id ? `(response to ${m.tool_call_id})` : ''}`).join(', ')}`,
+        `Message roles: ${messages
+          .map((m) => {
+            const functionCallCount =
+              m.parts?.filter((p) => 'functionCall' in p).length || 0;
+            const functionResponseCount =
+              m.parts?.filter((p) => 'functionResponse' in p).length || 0;
+            return `${m.role}${functionCallCount > 0 ? `(${functionCallCount} calls)` : ''}${functionResponseCount > 0 ? `(${functionResponseCount} responses)` : ''}`;
+          })
+          .join(', ')}`,
     );
 
     // First identify missing tool responses from original messages
     const missingToolIds = this.identifyMissingToolResponses(messages);
     logger.debug(() => `Missing tool IDs: ${JSON.stringify(missingToolIds)}`);
 
-    // Create a shallow copy with structured cloning for necessary fields
-    const deepCopyMessages: IMessage[] = messages.map((msg) => ({
+    // Create a deep copy of messages with proper structure cloning
+    const deepCopyMessages: Content[] = messages.map((msg) => ({
       ...msg,
-      // Ensure tool_calls are properly cloned if they exist
-      ...(msg.tool_calls && {
-        tool_calls: msg.tool_calls.map((tc) => ({
-          ...tc,
-          function: { ...tc.function },
-        })),
+      // Ensure parts are properly cloned if they exist
+      ...(msg.parts && {
+        parts: msg.parts.map((part) => ({ ...part })),
       }),
-      // Ensure usage is cloned if it exists
-      ...(msg.usage && { usage: { ...msg.usage } }),
     }));
 
     if (missingToolIds.length === 0) {
       return deepCopyMessages;
     }
 
-    // Find the last assistant message with tool calls
-    let lastAssistantIndex = -1;
+    // Find the last model message with function calls
+    let lastModelIndex = -1;
     for (let i = deepCopyMessages.length - 1; i >= 0; i--) {
       if (
-        deepCopyMessages[i].role === 'assistant' &&
-        deepCopyMessages[i].tool_calls
+        deepCopyMessages[i].role === 'model' &&
+        deepCopyMessages[i].parts?.some((p) => 'functionCall' in p)
       ) {
-        lastAssistantIndex = i;
+        lastModelIndex = i;
         break;
       }
     }
 
-    if (lastAssistantIndex === -1) {
+    if (lastModelIndex === -1) {
       return deepCopyMessages;
     }
 
-    // Extract tool names from the assistant message
+    // Extract tool names from the model message
     const toolNameMap = new Map<string, string>();
-    const assistantMsg = deepCopyMessages[lastAssistantIndex];
-    if (assistantMsg.tool_calls) {
-      assistantMsg.tool_calls.forEach((toolCall) => {
-        if (toolCall.id && toolCall.function?.name) {
-          toolNameMap.set(toolCall.id, toolCall.function.name);
+    const modelMsg = deepCopyMessages[lastModelIndex];
+    if (modelMsg.parts) {
+      modelMsg.parts.forEach((part) => {
+        if ('functionCall' in part && part.functionCall) {
+          const call = part.functionCall;
+          if (call.id && call.name) {
+            toolNameMap.set(call.id, call.name);
+          }
         }
       });
     }
@@ -183,20 +202,23 @@ export class SyntheticToolResponseHandler {
       () => `Created ${syntheticResponses.length} synthetic responses`,
     );
     syntheticResponses.forEach((sr) => {
-      logger.debug(
-        () =>
-          `Synthetic response: ${JSON.stringify({
-            role: sr.role,
-            tool_call_id: sr.tool_call_id,
-            content: sr.content,
-            _synthetic: (sr as IMessage & { _synthetic?: boolean })._synthetic,
-            _cancelled: (sr as IMessage & { _cancelled?: boolean })._cancelled,
-          })}`,
-      );
+      const firstPart = sr.parts?.[0];
+      if (firstPart && 'functionResponse' in firstPart) {
+        logger.debug(
+          () =>
+            `Synthetic response: ${JSON.stringify({
+              role: sr.role,
+              functionResponse_id: firstPart.functionResponse?.id,
+              functionResponse_name: firstPart.functionResponse?.name,
+              _synthetic: (sr as Content & { _synthetic?: boolean })._synthetic,
+              _cancelled: (sr as Content & { _cancelled?: boolean })._cancelled,
+            })}`,
+        );
+      }
     });
 
-    // Insert synthetic responses right after the assistant message
-    deepCopyMessages.splice(lastAssistantIndex + 1, 0, ...syntheticResponses);
+    // Insert synthetic responses right after the model message
+    deepCopyMessages.splice(lastModelIndex + 1, 0, ...syntheticResponses);
     logger.debug(
       () => `Final message count after patching: ${deepCopyMessages.length}`,
     );
@@ -211,12 +233,16 @@ export class SyntheticToolResponseHandler {
    * @returns Message history with cancellation notice added
    */
   static addCancellationNotice(
-    messages: IMessage[],
+    messages: Content[],
     cancelledCount: number,
-  ): IMessage[] {
-    const notice: IMessage = {
-      role: ContentGeneratorRole.ASSISTANT,
-      content: `${cancelledCount} tool execution${cancelledCount > 1 ? 's were' : ' was'} cancelled. You can retry specific tools or continue with the conversation.`,
+  ): Content[] {
+    const notice: Content = {
+      role: 'model',
+      parts: [
+        {
+          text: `${cancelledCount} tool execution${cancelledCount > 1 ? 's were' : ' was'} cancelled. You can retry specific tools or continue with the conversation.`,
+        },
+      ],
     };
 
     return [...messages, notice];

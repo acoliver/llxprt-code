@@ -1,0 +1,58 @@
+{
+  "compliant": false,
+  "has_integration_plan": true,
+  "builds_in_isolation": false,
+  "violations": [
+    "Plan fails REQ-003.1: Claims to delete IMessage.ts but file doesn't exist in current codebase",
+    "Implementation phases (P04, P06, P08) reference non-existent pseudocode line numbers",
+    "No actual pseudocode files created - only stub descriptions exist",
+    "Missing mutation testing requirement (80% minimum)",
+    "Missing property-based testing requirement (30% minimum)",
+    "Phases lack self-contained nature - dependencies between phases unclear",
+    "Some phases reference undefined files and methods",
+    "Plan contains reverse testing pattern - tests written after understanding current code"
+  ],
+  "specific_files_to_modify": [
+    "/packages/core/src/providers/IProvider.ts",
+    "/packages/core/src/providers/openai/OpenAIProvider.ts",
+    "/packages/core/src/providers/anthropic/AnthropicProvider.ts", 
+    "/packages/core/src/providers/gemini/GeminiProvider.ts",
+    "/packages/core/src/providers/openai/buildResponsesRequest.ts",
+    "/packages/core/src/providers/openai/parseResponsesStream.ts",
+    "/packages/core/src/core/contentGenerator.ts",
+    "/packages/core/src/core/geminiChat.ts"
+  ],
+  "user_access_points": [
+    "CLI commands using /provider openai /model gpt-5 or /model o3",
+    "/chat save and /chat load commands preserve metadata automatically",
+    "Conversation history maintains response IDs in metadata"
+  ],
+  "old_code_to_remove": [
+    "Hardcoded undefined conversation tracking in OpenAIProvider", 
+    "IMessage type imports throughout codebase (but IMessage.ts doesn't exist)",
+    "Return type IMessage in parseResponsesStream (should be Content[])"
+  ],
+  "pseudocode_used": false,
+  "reverse_testing_found": true,
+  "mutation_testing": false,
+  "property_testing": false,
+  "phases_self_contained": false,
+  "follows_tdd_pattern": true,
+  "detailed_analysis": {
+    "integration_strength": "STRONG - Plan identifies specific existing files and integration points",
+    "isolation_risk": "LOW - Feature integrates with existing sessionId system and Content metadata",
+    "major_issues": [
+      "References non-existent IMessage.ts file for deletion",
+      "Pseudocode is described but not actually created with line numbers",
+      "Missing advanced testing requirements (mutation, property-based)",
+      "Implementation phases reference pseudocode lines that don't exist"
+    ],
+    "positive_aspects": [
+      "Clear integration with existing sessionId flow",
+      "Uses existing Content metadata system", 
+      "Updates specific existing files rather than creating new ones",
+      "Follows TDD pattern with test-first phases",
+      "Identifies exact call sites and integration points"
+    ]
+  }
+}

@@ -301,10 +301,15 @@ export class GeminiProvider extends BaseProvider {
     ];
   }
 
+  /**
+   * @plan PLAN-20250826-RESPONSES.P05
+   * @requirement REQ-001
+   */
   async *generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
     _toolFormat?: string,
+    _sessionId?: string,
   ): AsyncIterableIterator<Content> {
     // Comprehensive debug logging
     this.logger.debug(

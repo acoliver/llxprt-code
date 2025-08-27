@@ -121,7 +121,11 @@ export async function createContentGenerator(
   };
   // Always use provider path if a provider manager exists
   if (config.providerManager) {
-    return new ProviderContentGenerator(config.providerManager, config);
+    return new ProviderContentGenerator(
+      config.providerManager,
+      config,
+      gcConfig,
+    );
   }
 
   if (

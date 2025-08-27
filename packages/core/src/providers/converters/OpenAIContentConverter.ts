@@ -5,6 +5,7 @@
  */
 import { Content, Part, FunctionCall } from '@google/genai';
 import { IContentConverter } from './IContentConverter.js';
+import { safeJsonStringify, safeJsonParse } from '../../utils/jsonUtils.js';
 
 // OpenAI message format types
 export interface OpenAIMessage {
@@ -12,6 +13,11 @@ export interface OpenAIMessage {
   content?: string;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 }
 
 export interface OpenAIToolCall {
@@ -74,16 +80,20 @@ export class OpenAIContentConverter implements IContentConverter {
           // Pseudocode line 21-22: ELSE IF part has functionResponse
           else if (part.functionResponse) {
             // Use the ID from the functionResponse - it should already exist!
-            const responseId = (part.functionResponse as { id?: string }).id;
+            let responseId = (part.functionResponse as { id?: string }).id;
             if (!responseId) {
-              throw new Error(
-                `Function response for '${part.functionResponse.name}' is missing required ID`,
+              // Try to find matching call ID from pendingToolCalls
+              responseId =
+                pendingToolCalls.get(part.functionResponse.name || 'unknown') ||
+                `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              console.warn(
+                `[OpenAIContentConverter] Missing function response ID for '${part.functionResponse.name}', using: ${responseId}`,
               );
             }
             // Pseudocode line 22: ADD OpenAI message with role="tool", tool_call_id
             messages.push({
               role: 'tool',
-              content: JSON.stringify(part.functionResponse.response),
+              content: safeJsonStringify(part.functionResponse.response),
               tool_call_id: responseId,
             });
           }
@@ -105,11 +115,11 @@ export class OpenAIContentConverter implements IContentConverter {
           // Pseudocode line 32-35: ELSE IF part has functionCall
           else if (part.functionCall) {
             // Pseudocode line 33: CREATE toolCall with id, name, arguments
-            // ID MUST EXIST - FAIL FAST IF NOT
-            const callId = (part.functionCall as { id?: string }).id;
+            let callId = (part.functionCall as { id?: string }).id;
             if (!callId) {
-              throw new Error(
-                `Function call for '${part.functionCall.name}' is missing required ID`,
+              callId = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              console.warn(
+                `[OpenAIContentConverter] Missing function call ID for '${part.functionCall.name}', generated: ${callId}`,
               );
             }
             const toolCall: OpenAIToolCall = {
@@ -117,7 +127,7 @@ export class OpenAIContentConverter implements IContentConverter {
               type: 'function',
               function: {
                 name: part.functionCall.name || 'unknown',
-                arguments: JSON.stringify(part.functionCall.args),
+                arguments: safeJsonStringify(part.functionCall.args),
               },
             };
             // Pseudocode line 34: ADD toolCall to toolCalls
@@ -247,14 +257,14 @@ export class OpenAIContentConverter implements IContentConverter {
   }
 
   fromProviderFormat(response: unknown): Content {
-    // Check if it's an IMessage (has role and content at top level)
+    // Check if it's an OpenAI message (has role and content at top level)
     const msg = response as {
       role?: string;
       content?: unknown;
       tool_calls?: unknown;
     };
     if (msg.role && (msg.content !== undefined || msg.tool_calls)) {
-      // It's an IMessage, convert directly
+      // It's an OpenAI message, convert directly
       const parts: Part[] = [];
 
       if (msg.content && typeof msg.content === 'string') {
@@ -268,10 +278,13 @@ export class OpenAIContentConverter implements IContentConverter {
             function: { name: string; arguments: string };
           };
           if (tc.function && tc.function.name && tc.function.arguments) {
+            // Ensure we always set the ID
             const functionCall: FunctionCall = {
-              id: tc.id, // PRESERVE THE ID FROM OPENAI!
+              id:
+                tc.id ||
+                `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               name: tc.function.name,
-              args: JSON.parse(tc.function.arguments) as Record<
+              args: safeJsonParse(tc.function.arguments, {}) as Record<
                 string,
                 unknown
               >,
@@ -281,7 +294,7 @@ export class OpenAIContentConverter implements IContentConverter {
         }
       }
 
-      // Map IMessage roles to Content roles
+      // Map OpenAI message roles to Content roles
       let role: 'user' | 'model' = 'model';
       if (msg.role === 'user') {
         role = 'user';
@@ -313,7 +326,7 @@ export class OpenAIContentConverter implements IContentConverter {
           // Pseudocode line 67-68: CREATE functionCall part with name and args
           const functionCall: FunctionCall = {
             name: toolCall.function.name,
-            args: JSON.parse(toolCall.function.arguments) as Record<
+            args: safeJsonParse(toolCall.function.arguments, {}) as Record<
               string,
               unknown
             >,

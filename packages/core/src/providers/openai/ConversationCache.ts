@@ -1,9 +1,9 @@
-import { IMessage } from '../IMessage.js';
+import { Content } from '@google/genai';
 
 interface CacheEntry {
   conversationId: string;
   parentId: string;
-  messages: IMessage[];
+  messages: Content[];
   timestamp: number;
   promptTokensAccum: number;
 }
@@ -47,7 +47,7 @@ export class ConversationCache {
   set(
     conversationId: string,
     parentId: string,
-    messages: IMessage[],
+    messages: Content[],
     promptTokensAccum: number = 0,
   ): void {
     const key = this.generateKey(conversationId, parentId);
@@ -65,7 +65,7 @@ export class ConversationCache {
     this.evictIfNeeded();
   }
 
-  get(conversationId: string, parentId: string): IMessage[] | null {
+  get(conversationId: string, parentId: string): Content[] | null {
     const key = this.generateKey(conversationId, parentId);
     const entry = this.cache.get(key);
 

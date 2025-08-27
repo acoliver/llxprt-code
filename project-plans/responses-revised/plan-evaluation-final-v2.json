@@ -1,0 +1,58 @@
+{
+  "compliant": false,
+  "has_integration_plan": true,
+  "builds_in_isolation": false,
+  "violations": [
+    "Plan follows TDD but phases are mixed stub/impl pattern rather than pure TDD",
+    "Some phases don't have clear TDD separation (e.g., phase 3 is stub but also modifies interface)",
+    "No explicit mutation testing requirement mentioned in phases",
+    "No explicit property-based testing requirement mentioned in phases",
+    "Phase numbering inconsistent with complete phase list (gaps in sequence)",
+    "Missing verification phases for some implementation phases",
+    "LoggingProviderWrapper integration not explicitly verified in integration tests",
+    "No reverse testing patterns found but this is actually good (violation description incorrect)"
+  ],
+  "specific_files_to_modify": [
+    "/packages/core/src/providers/IProvider.ts",
+    "/packages/core/src/providers/openai/OpenAIProvider.ts", 
+    "/packages/core/src/providers/openai/buildResponsesRequest.ts",
+    "/packages/core/src/providers/openai/parseResponsesStream.ts",
+    "/packages/core/src/providers/anthropic/AnthropicProvider.ts",
+    "/packages/core/src/providers/gemini/GeminiProvider.ts",
+    "/packages/core/src/providers/LoggingProviderWrapper.ts",
+    "/packages/core/src/core/geminiChat.ts",
+    "/packages/core/src/core/contentGenerator.ts",
+    "/packages/core/src/providers/IMessage.ts"
+  ],
+  "user_access_points": [
+    "CLI commands using `/provider openai /model gpt-5` or `/model o3`",
+    "Save/Load functionality via `/chat save` and `/chat load`",
+    "Conversation history automatically maintains response IDs",
+    "Integration tests for OpenAI responses tracking"
+  ],
+  "old_code_to_remove": [
+    "Hardcoded undefined for conversation_id in OpenAIProvider",
+    "Hardcoded undefined for previous_response_id in OpenAIProvider", 
+    "All IMessage type imports throughout codebase",
+    "IMessage.ts file completely",
+    "parseResponsesStream return type IMessage -> Content[]"
+  ],
+  "pseudocode_used": true,
+  "reverse_testing_found": false,
+  "mutation_testing": false,
+  "property_testing": false,
+  "phases_self_contained": true,
+  "follows_tdd_pattern": false,
+  "all_requirements_covered": true,
+  "tests_are_behavioral": true,
+  "detailed_analysis": {
+    "integration_strength": "STRONG - Plan identifies specific existing files that will use the feature and shows how sessionId flows from GeminiChat through ContentGenerator to providers",
+    "isolation_risk": "LOW - Feature integrates with existing system from the start, updates existing interfaces rather than creating new ones",
+    "pseudocode_quality": "GOOD - Numbered lines, clear algorithmic steps, references requirements, covers all modifications",
+    "tdd_compliance": "PARTIAL - Has test phases but mixes stub/implementation patterns instead of pure test-first approach",
+    "testing_coverage": "ADEQUATE - Behavioral tests defined but missing explicit mutation and property-based testing requirements",
+    "phase_organization": "GOOD - Self-contained phases with clear dependencies and verification steps",
+    "requirement_mapping": "EXCELLENT - All requirements explicitly mapped to phases with pseudocode line references"
+  },
+  "recommendation": "APPROVE WITH CONDITIONS - The plan has strong integration focus and avoids building in isolation. However, it needs to explicitly require mutation testing (80% minimum) and property-based testing (30% minimum) in the verification phases. The TDD pattern could be strengthened by having pure test-first phases rather than mixed stub/impl phases."
+}

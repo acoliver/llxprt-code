@@ -68,7 +68,6 @@ describe('ContextIndicator UI', () => {
       totalTokens: 52000,
       remoteTokens: 50000,
       promptTokens: 2000,
-      maxTokens: 128000,
       contextUsedPercent: 40.625,
       tokensRemaining: 76000,
     });
@@ -96,7 +95,6 @@ describe('ContextIndicator UI', () => {
       totalTokens: 120000,
       remoteTokens: 115000,
       promptTokens: 5000,
-      maxTokens: 128000,
       contextUsedPercent: 93.75,
       tokensRemaining: 8000,
     });

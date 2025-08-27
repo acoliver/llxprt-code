@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { IMessage, ITool } from '@vybestack/llxprt-code-core';
+import { Content } from '@google/genai';
+import { ITool } from '@vybestack/llxprt-code-core';
 
 export interface RedactionPattern {
   name: string;
@@ -44,30 +45,49 @@ export class ConversationDataRedactor {
   /**
    * Redact sensitive data from a conversation message
    */
-  redactMessage(message: IMessage, providerName: string): IMessage {
+  redactMessage(message: Content, providerName: string): Content {
     if (!this.shouldRedact()) {
       return message;
     }
 
     const redactedMessage = { ...message };
 
-    // Content is always a string in IMessage
-    if (redactedMessage.content) {
-      redactedMessage.content = this.redactContent(
-        redactedMessage.content,
-        providerName,
-      );
-    }
-
-    // Redact tool_calls if present
-    if (redactedMessage.tool_calls) {
-      redactedMessage.tool_calls = redactedMessage.tool_calls.map((call) => ({
-        ...call,
-        function: {
-          ...call.function,
-          arguments: this.redactContent(call.function.arguments, providerName),
-        },
-      }));
+    // Process parts in Content format
+    if (redactedMessage.parts) {
+      redactedMessage.parts = redactedMessage.parts.map((part) => {
+        if (part.text) {
+          return {
+            ...part,
+            text: this.redactContent(part.text, providerName),
+          };
+        }
+        if (part.functionCall) {
+          return {
+            ...part,
+            functionCall: {
+              ...part.functionCall,
+              args: part.functionCall.args
+                ? this.redactObjectValues(part.functionCall.args, providerName)
+                : {},
+            },
+          };
+        }
+        if (part.functionResponse) {
+          return {
+            ...part,
+            functionResponse: {
+              ...part.functionResponse,
+              response: part.functionResponse.response
+                ? this.redactObjectValues(
+                    part.functionResponse.response,
+                    providerName,
+                  )
+                : {},
+            },
+          };
+        }
+        return part;
+      });
     }
 
     return redactedMessage;
@@ -122,7 +142,7 @@ export class ConversationDataRedactor {
   /**
    * Redact entire conversation consistently
    */
-  redactConversation(messages: IMessage[], providerName: string): IMessage[] {
+  redactConversation(messages: Content[], providerName: string): Content[] {
     return messages.map((message) => this.redactMessage(message, providerName));
   }
 
@@ -472,6 +492,33 @@ export class ConversationDataRedactor {
 
   // TODO: Re-add isPatternEnabled method when needed for dynamic pattern checking
   // private isPatternEnabled(patternName: string): boolean {
+
+  /**
+   * Redact values in an object recursively
+   */
+  private redactObjectValues(
+    obj: Record<string, unknown>,
+    providerName: string,
+  ): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (typeof value === 'string') {
+        result[key] = this.redactContent(value, providerName);
+      } else if (
+        typeof value === 'object' &&
+        value !== null &&
+        !Array.isArray(value)
+      ) {
+        result[key] = this.redactObjectValues(
+          value as Record<string, unknown>,
+          providerName,
+        );
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
 
   /**
    * Update redaction configuration

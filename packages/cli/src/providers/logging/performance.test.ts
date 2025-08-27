@@ -7,16 +7,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   IProvider,
-  IMessage,
   ITool,
   ContentGeneratorRole,
 } from '@vybestack/llxprt-code-core';
+import { Content } from '@google/genai';
 import type { Config } from '@vybestack/llxprt-code-core';
 
 // Interfaces that will be implemented in the next phase
 interface LoggingProviderWrapper {
   generateChatCompletion(
-    messages: IMessage[],
+    messages: Content[],
     tools?: ITool[],
     toolFormat?: string,
   ): AsyncIterableIterator<unknown>;
@@ -24,8 +24,8 @@ interface LoggingProviderWrapper {
 }
 
 interface ConversationDataRedactor {
-  redactMessage(message: IMessage, provider: string): IMessage;
-  redactConversation(messages: IMessage[], provider: string): IMessage[];
+  redactMessage(message: Content, provider: string): Content;
+  redactConversation(messages: Content[], provider: string): Content[];
 }
 
 interface ConversationStorage {
@@ -36,7 +36,7 @@ interface ConversationLogEntry {
   timestamp: string;
   conversation_id: string;
   provider_name: string;
-  messages: IMessage[];
+  messages: Content[];
 }
 
 // Performance measurement utilities
@@ -99,12 +99,12 @@ function createMockProvider(name: string, responseDelay = 0): IProvider {
   return {
     name,
     getModels: vi.fn().mockResolvedValue([]),
-    async *generateChatCompletion(_messages: IMessage[]) {
+    async *generateChatCompletion(_messages: Content[]) {
       if (responseDelay > 0) {
         await new Promise((resolve) => setTimeout(resolve, responseDelay));
       }
       yield {
-        content: `Response from ${name}`,
+        parts: [{ text: `Response from ${name}` }],
         role: ContentGeneratorRole.ASSISTANT,
       };
     },
@@ -130,15 +130,19 @@ async function consumeAsyncIterable<T>(
   return results;
 }
 
-function createTypicalConversation(messageCount: number): IMessage[] {
-  const messages: IMessage[] = [];
+function createTypicalConversation(messageCount: number): Content[] {
+  const messages: Content[] = [];
   for (let i = 0; i < messageCount; i++) {
     messages.push({
       role:
         i % 2 === 0
           ? ContentGeneratorRole.USER
           : ContentGeneratorRole.ASSISTANT,
-      content: `Message ${i + 1}: This is a typical conversation message with moderate length content.`,
+      parts: [
+        {
+          text: `Message ${i + 1}: This is a typical conversation message with moderate length content.`,
+        },
+      ],
     });
   }
   return messages;
@@ -148,23 +152,33 @@ function createTypicalConversation(messageCount: number): IMessage[] {
 class MockConversationDataRedactor implements ConversationDataRedactor {
   private redactionCache = new Map<string, string>();
 
-  redactMessage(message: IMessage, provider: string): IMessage {
-    const cacheKey = `${message.content}-${provider}`;
+  redactMessage(message: Content, provider: string): Content {
+    const firstTextPart = message.parts?.find((p) => 'text' in p);
+    const originalText =
+      firstTextPart && 'text' in firstTextPart ? firstTextPart.text || '' : '';
+    const cacheKey = `${originalText}-${provider}`;
     let redactedContent = this.redactionCache.get(cacheKey);
 
     if (!redactedContent) {
       // Simulate redaction work
-      redactedContent = message.content?.replace(
+      redactedContent = originalText.replace(
         /sk-[a-zA-Z0-9]{48}/g,
         '[REDACTED-API-KEY]',
       );
-      this.redactionCache.set(cacheKey, redactedContent || '');
+      this.redactionCache.set(cacheKey, redactedContent);
     }
 
-    return { ...message, content: redactedContent || '' };
+    const redactedParts = message.parts?.map((part) => {
+      if ('text' in part) {
+        return { ...part, text: redactedContent || '' };
+      }
+      return part;
+    });
+
+    return { ...message, parts: redactedParts };
   }
 
-  redactConversation(messages: IMessage[], provider: string): IMessage[] {
+  redactConversation(messages: Content[], provider: string): Content[] {
     return messages.map((msg) => this.redactMessage(msg, provider));
   }
 }
@@ -198,7 +212,7 @@ class MockLoggingProviderWrapper implements LoggingProviderWrapper {
   ) {}
 
   async *generateChatCompletion(
-    messages: IMessage[],
+    messages: Content[],
     tools?: ITool[],
     toolFormat?: string,
   ): AsyncIterableIterator<unknown> {
@@ -269,8 +283,8 @@ describe('Conversation Logging Performance Impact', () => {
       storage,
     );
 
-    const message: IMessage[] = [
-      { role: ContentGeneratorRole.USER, content: 'Test message' },
+    const message: Content[] = [
+      { role: ContentGeneratorRole.USER, parts: [{ text: 'Test message' }] },
     ];
 
     // Measure wrapped provider with logging disabled
@@ -391,7 +405,10 @@ describe('Conversation Logging Performance Impact', () => {
 
     for (const size of contentSizes) {
       const content = 'x'.repeat(size);
-      const message: IMessage = { role: ContentGeneratorRole.USER, content };
+      const message: Content = {
+        role: ContentGeneratorRole.USER,
+        parts: [{ text: content }],
+      };
 
       measurer.reset();
       for (let i = 0; i < 100; i++) {
@@ -618,8 +635,11 @@ describe('Conversation Logging Performance Impact', () => {
         ),
     );
 
-    const message: IMessage[] = [
-      { role: ContentGeneratorRole.USER, content: 'Switch test message' },
+    const message: Content[] = [
+      {
+        role: ContentGeneratorRole.USER,
+        parts: [{ text: 'Switch test message' }],
+      },
     ];
 
     // Measure switching overhead

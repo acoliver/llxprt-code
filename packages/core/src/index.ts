@@ -141,7 +141,6 @@ export * from './providers/IProvider.js';
 export * from './providers/ITool.js';
 export * from './providers/IModel.js';
 export * from './providers/IProviderManager.js';
-export * from './providers/IMessage.js';
 export * from './providers/ContentGeneratorRole.js';
 export * from './providers/ProviderContentGenerator.js';
 export * from './providers/ProviderManager.js';

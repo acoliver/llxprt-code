@@ -14,7 +14,8 @@
 import { Config } from '@vybestack/llxprt-code-core';
 import { ConversationDataRedactor } from '../packages/cli/src/utils/privacy/ConversationDataRedactor.js';
 import { PrivacyManager } from '../packages/cli/src/utils/privacy/PrivacyManager.js';
-import type { IProvider, IMessage } from '@vybestack/llxprt-code-core';
+import type { IProvider } from '@vybestack/llxprt-code-core';
+import type { Content } from '@google/genai';
 
 interface ValidationResult {
   test: string;
@@ -123,7 +124,7 @@ export class PrivacyComplianceValidator {
     const redactor = new ConversationDataRedactor();
 
     // Test API key redaction
-    const apiKeyMessage: IMessage = {
+    const apiKeyMessage: Content = {
       role: 'user',
       content:
         'My OpenAI key is sk-1234567890abcdefghijklmnopqrstuvwxyz and my Anthropic key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456789012345678901234567890123456789012345678901234567890',
@@ -145,7 +146,7 @@ export class PrivacyComplianceValidator {
     });
 
     // Test credential redaction
-    const credentialMessage: IMessage = {
+    const credentialMessage: Content = {
       role: 'user',
       content: 'My password is secretpass123 and my token is abc123xyz',
     };
@@ -161,7 +162,7 @@ export class PrivacyComplianceValidator {
     });
 
     // Test sensitive file path redaction
-    const filePathMessage: IMessage = {
+    const filePathMessage: Content = {
       role: 'user',
       content:
         'Read the file /home/user/.ssh/id_rsa and /Users/user/.aws/credentials',

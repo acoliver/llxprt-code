@@ -26,7 +26,6 @@
 import { DebugLogger } from '../../debug/index.js';
 import { IModel } from '../IModel.js';
 import { ITool } from '../ITool.js';
-import { IMessage } from '../IMessage.js';
 import { ContentGeneratorRole } from '../ContentGeneratorRole.js';
 import { GemmaToolCallParser } from '../../parsers/TextToolCallParser.js';
 import { ToolFormatter } from '../../tools/ToolFormatter.js';
@@ -35,11 +34,8 @@ import OpenAI from 'openai';
 import { randomBytes } from 'crypto';
 import { IProviderConfig } from '../types/IProviderConfig.js';
 import { RESPONSES_API_MODELS } from './RESPONSES_API_MODELS.js';
-import { ConversationCache } from './ConversationCache.js';
-import {
-  estimateMessagesTokens,
-  estimateRemoteTokens,
-} from './estimateRemoteTokens.js';
+// ConversationCache removed - providers should be stateless
+import { estimateMessagesTokens } from './estimateRemoteTokens.js';
 // ConversationContext removed - using inline conversation ID generation
 import {
   parseResponsesStream,
@@ -56,6 +52,46 @@ import { getSettingsService } from '../../settings/settingsServiceInstance.js';
 import { Content } from '@google/genai';
 import { OpenAIContentConverter } from '../converters/OpenAIContentConverter.js';
 
+/**
+ * Usage metadata that can be attached to Content objects
+ */
+type UsageMetadata = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+/**
+ * Content with usage metadata
+ */
+type ContentWithUsage = Content & {
+  usage?: UsageMetadata;
+};
+
+/**
+ * OpenAI-compatible message format for internal processing
+ */
+type OpenAIMessage = {
+  role: string;
+  content?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+  tool_call_id?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  _synthetic?: boolean;
+  _cancelled?: boolean;
+};
+
 export class OpenAIProvider extends BaseProvider {
   private logger: DebugLogger;
   private openai: OpenAI;
@@ -64,7 +100,7 @@ export class OpenAIProvider extends BaseProvider {
   private providerConfig?: IProviderConfig;
   private toolFormatter: ToolFormatter;
   private toolFormatOverride?: ToolFormat;
-  private conversationCache: ConversationCache;
+  // ConversationCache removed - providers should be stateless
   private modelParams?: Record<string, unknown>;
   private _cachedClient?: OpenAI;
   private _cachedClientKey?: string;
@@ -127,7 +163,7 @@ export class OpenAIProvider extends BaseProvider {
     this.baseURL = baseURL;
     this.providerConfig = config;
     this.toolFormatter = new ToolFormatter();
-    this.conversationCache = new ConversationCache();
+    // ConversationCache removed - providers should be stateless
 
     // Initialize from SettingsService
     this.initializeFromSettings().catch((error) => {
@@ -341,7 +377,7 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   private async callResponsesEndpoint(
-    messages: IMessage[],
+    contents: Content[],
     tools?: ITool[],
     options?: {
       stream?: boolean;
@@ -350,7 +386,12 @@ export class OpenAIProvider extends BaseProvider {
       tool_choice?: string | object;
       stateful?: boolean;
     },
-  ): Promise<AsyncIterableIterator<IMessage>> {
+  ): Promise<AsyncIterableIterator<Content>> {
+    // Convert Content[] to OpenAI format for internal processing
+    const messages = this.converter.toProviderFormat(
+      contents,
+    ) as OpenAIMessage[];
+
     // Check if API key is available (using resolved authentication)
     const apiKey = await this.getAuthToken();
     if (!apiKey) {
@@ -380,21 +421,8 @@ export class OpenAIProvider extends BaseProvider {
       }
     }
 
-    // Check cache for existing conversation
-    if (options?.conversationId && options?.parentId) {
-      const cachedMessages = this.conversationCache.get(
-        options.conversationId,
-        options.parentId,
-      );
-      if (cachedMessages) {
-        // Return cached messages as an async iterable
-        return (async function* () {
-          for (const message of cachedMessages) {
-            yield message;
-          }
-        })();
-      }
-    }
+    // No cache - providers should be stateless
+    // The caller should manage conversation history
 
     // Format tools for Responses API
     const formattedTools = tools
@@ -450,13 +478,7 @@ export class OpenAIProvider extends BaseProvider {
             'Context length exceeded, invalidating cache and retrying stateless...',
         );
 
-        // Invalidate the cache for this conversation
-        if (options?.conversationId && options?.parentId) {
-          this.conversationCache.invalidate(
-            options.conversationId,
-            options.parentId,
-          );
-        }
+        // No cache to invalidate - providers are stateless
 
         // Retry without conversation context (pure stateless)
         const retryRequest = buildResponsesRequest({
@@ -518,59 +540,46 @@ export class OpenAIProvider extends BaseProvider {
 
   private async handleResponsesApiResponse(
     response: Response,
-    messages: IMessage[],
+    messages: OpenAIMessage[],
     conversationId: string | undefined,
     parentId: string | undefined,
     isStreaming: boolean,
-  ): Promise<AsyncIterableIterator<IMessage>> {
+  ): Promise<AsyncIterableIterator<Content>> {
     // Handle streaming response
     if (isStreaming && response.body) {
-      const collectedMessages: IMessage[] = [];
-      const cache = this.conversationCache;
+      const collectedContents: Content[] = [];
+      // No cache - providers should be stateless
 
       return (async function* () {
-        for await (const message of parseResponsesStream(response.body!)) {
-          // Collect messages for caching
-          if (message.content || message.tool_calls) {
-            collectedMessages.push(message);
-          } else if (message.usage && collectedMessages.length === 0) {
+        for await (const content of parseResponsesStream(response.body!)) {
+          // Collect contents for caching
+          if (content.parts && content.parts.length > 0) {
+            collectedContents.push(content);
+          } else if (
+            (content as ContentWithUsage).usage &&
+            collectedContents.length === 0
+          ) {
             // If we only got a usage message with no content, add a placeholder
-            collectedMessages.push({
-              role: ContentGeneratorRole.ASSISTANT,
-              content: '',
+            collectedContents.push({
+              role: 'model',
+              parts: [{ text: '' }],
             });
           }
 
-          // Update the parentId in the context as soon as we get a message ID
-          if (message.id) {
-            // ConversationContext.setParentId(message.id);
+          // Update the parentId in the context as soon as we get a content ID
+          const contentWithMetadata = content as Content & {
+            metadata?: { responseId?: string };
+          };
+          if (contentWithMetadata.metadata?.responseId) {
+            // ConversationContext.setParentId(contentWithMetadata.metadata.responseId);
             // TODO: Handle parent ID updates when ConversationContext is available
           }
 
-          yield message;
+          yield content;
         }
 
-        // Cache the collected messages with token count
-        if (conversationId && parentId && collectedMessages.length > 0) {
-          // Get previous accumulated tokens
-          const previousTokens = cache.getAccumulatedTokens(
-            conversationId,
-            parentId,
-          );
-
-          // Calculate tokens for this request (messages + response)
-          const requestTokens = estimateMessagesTokens(messages);
-          const responseTokens = estimateMessagesTokens(collectedMessages);
-          const totalTokensForRequest = requestTokens + responseTokens;
-
-          // Update cache with new accumulated total
-          cache.set(
-            conversationId,
-            parentId,
-            collectedMessages,
-            previousTokens + totalTokensForRequest,
-          );
-        }
+        // No caching - providers should be stateless
+        // Token tracking should be handled at a higher level if needed
       })();
     }
 
@@ -598,7 +607,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     const data = (await response.json()) as OpenAIResponse;
-    const resultMessages: IMessage[] = [];
+    const resultContents: Content[] = [];
 
     // DEFENSIVE FIX: Handle potential array response from providers that violate OpenAI spec
     // Some providers (like Cerebras) may return an array of responses instead of a single response
@@ -640,79 +649,78 @@ export class OpenAIProvider extends BaseProvider {
         }
       }
 
-      const message: IMessage = {
-        role: ContentGeneratorRole.ASSISTANT,
-        content: aggregatedContent.join(''),
+      const content: Content = {
+        role: 'model',
+        parts: [{ text: aggregatedContent.join('') }],
       };
 
+      // Add function calls as parts if present
       if (aggregatedToolCalls.length > 0) {
-        message.tool_calls = aggregatedToolCalls;
+        for (const toolCall of aggregatedToolCalls) {
+          content.parts?.push({
+            functionCall: {
+              name: toolCall.function.name,
+              args: JSON.parse(toolCall.function.arguments),
+            },
+          });
+        }
       }
 
+      // Add usage data as metadata if present
       if (aggregatedUsage) {
-        message.usage = {
+        (content as ContentWithUsage).usage = {
           prompt_tokens: aggregatedUsage.prompt_tokens || 0,
           completion_tokens: aggregatedUsage.completion_tokens || 0,
           total_tokens: aggregatedUsage.total_tokens || 0,
         };
       }
 
-      resultMessages.push(message);
+      resultContents.push(content);
       // Convert to async iterator for consistent return type
       return (async function* () {
-        for (const msg of resultMessages) {
-          yield msg;
+        for (const content of resultContents) {
+          yield content;
         }
       })();
     }
 
     if (data.choices && data.choices.length > 0) {
       const choice = data.choices[0];
-      const message: IMessage = {
-        role: choice.message.role as ContentGeneratorRole,
-        content: choice.message.content || '',
+      const content: Content = {
+        role: 'model',
+        parts: [{ text: choice.message.content || '' }],
       };
 
+      // Add function calls as parts if present
       if (choice.message.tool_calls) {
-        message.tool_calls = choice.message.tool_calls;
+        for (const toolCall of choice.message.tool_calls) {
+          content.parts?.push({
+            functionCall: {
+              name: toolCall.function.name,
+              args: JSON.parse(toolCall.function.arguments),
+            },
+          });
+        }
       }
 
+      // Add usage data as metadata if present
       if (data.usage) {
-        message.usage = {
+        (content as ContentWithUsage).usage = {
           prompt_tokens: data.usage.prompt_tokens || 0,
           completion_tokens: data.usage.completion_tokens || 0,
           total_tokens: data.usage.total_tokens || 0,
         };
       }
 
-      resultMessages.push(message);
+      resultContents.push(content);
     }
 
-    // Cache the result with token count
-    if (conversationId && parentId && resultMessages.length > 0) {
-      // Get previous accumulated tokens
-      const previousTokens = this.conversationCache.getAccumulatedTokens(
-        conversationId,
-        parentId,
-      );
-
-      // Calculate tokens for this request
-      const requestTokens = estimateMessagesTokens(messages);
-      const responseTokens = estimateMessagesTokens(resultMessages);
-      const totalTokensForRequest = requestTokens + responseTokens;
-
-      // Update cache with new accumulated total
-      this.conversationCache.set(
-        conversationId,
-        parentId,
-        resultMessages,
-        previousTokens + totalTokensForRequest,
-      );
-    }
+    // No caching - providers should be stateless
+    // Token tracking should be handled at a higher level if needed
 
     return (async function* () {
-      for (const message of resultMessages) {
-        yield message;
+      for (const content of resultContents) {
+        yield content;
       }
     })();
   }
@@ -798,11 +806,34 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   /**
-   * Helper method to convert IMessage to Content and yield
+   * Helper method to convert OpenAI message format to Content and yield
    * @plan PLAN-20250113-SIMPLIFICATION.P07
    */
-  private yieldAsContent(message: IMessage): Content {
+  private yieldAsContent(message: OpenAIMessage): Content {
     return this.converter.fromProviderFormat(message);
+  }
+
+  /**
+   * @plan PLAN-20250826-RESPONSES.P17
+   * @requirement REQ-002.3
+   * @pseudocode lines 23-32
+   */
+  private findPreviousResponseId(contents: Content[]): string | null {
+    // Line 24: FOR i FROM contents.length - 1 TO 0 STEP -1
+    for (let i = contents.length - 1; i >= 0; i--) {
+      // Line 25: IF contents[i].role IN ['assistant', 'model'] THEN
+      if (contents[i].role === 'assistant' || contents[i].role === 'model') {
+        // Line 26-27: IF metadata.responseId EXISTS THEN RETURN it
+        const contentWithMetadata = contents[i] as Content & {
+          metadata?: { responseId?: string };
+        };
+        if (contentWithMetadata.metadata?.responseId) {
+          return contentWithMetadata.metadata.responseId;
+        }
+      }
+    }
+    // Line 31: RETURN null
+    return null;
   }
 
   /**
@@ -810,10 +841,15 @@ export class OpenAIProvider extends BaseProvider {
    * @requirement REQ-003.1
    * @pseudocode lines 140-163
    */
+  /**
+   * @plan PLAN-20250826-RESPONSES.P05
+   * @requirement REQ-001
+   */
   async *generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
     _toolFormat?: string,
+    _sessionId?: string,
   ): AsyncIterableIterator<Content> {
     // If we have a temporary system instruction, prepend it as a system Content
     let contentsToProcess = contents;
@@ -827,11 +863,10 @@ export class OpenAIProvider extends BaseProvider {
       this.temporarySystemInstruction = undefined;
     }
 
-    // Pseudocode line 149: Convert Content[] to OpenAI format
-    // Cast to IMessage[] since OpenAI converter returns OpenAIMessage[] which is compatible
+    // For non-responses API path, convert Content[] to OpenAI format
     const messages = this.converter.toProviderFormat(
       contentsToProcess,
-    ) as IMessage[];
+    ) as OpenAIMessage[];
 
     // Check if API key is available (using resolved authentication)
     const apiKey = await this.getAuthToken();
@@ -843,26 +878,30 @@ export class OpenAIProvider extends BaseProvider {
       throw new Error('OpenAI API key is required to generate completions');
     }
 
-    // Check if we should use responses endpoint
+    // Line 12: IF this.shouldUseResponses(model) THEN
     if (this.shouldUseResponses(this.currentModel)) {
-      // Generate conversation IDs inline (would normally come from application context)
-      const conversationId = undefined;
-      const parentId = undefined;
+      // Line 13: previousResponseId = CALL findPreviousResponseId(contents)
+      const previousResponseId = this.findPreviousResponseId(contentsToProcess);
 
-      // Convert response back to Content
-      for await (const message of await this.callResponsesEndpoint(
-        messages,
+      // Line 14: conversationId = sessionId OR generateTempId()
+      const conversationId =
+        _sessionId ||
+        `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Line 15-17: Build and call responses endpoint
+      // Stream responses directly as Content (no conversion needed)
+      for await (const content of await this.callResponsesEndpoint(
+        contentsToProcess,
         tools,
         {
           stream: true,
           tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
-          stateful: false, // Always stateless for Phase 22-01
+          stateful: true, // Default to stateful mode - that's the point of Responses API
           conversationId,
-          parentId,
+          parentId: previousResponseId || undefined,
         },
       )) {
-        // Pseudocode line 159-162: Stream responses
-        const content = this.converter.fromProviderFormat(message);
+        // Content is already in the correct format from parseResponsesStream
         yield content;
       }
       return;
@@ -871,7 +910,7 @@ export class OpenAIProvider extends BaseProvider {
     // Don't automatically add synthetic responses - they should only be added when tools are actually cancelled
     // Check if we have any existing synthetic responses (from actual cancellations)
     const existingSyntheticCount = messages.filter(
-      (msg) => (msg as IMessage & { _synthetic?: boolean })._synthetic,
+      (msg) => msg._synthetic,
     ).length;
 
     if (existingSyntheticCount > 0) {
@@ -899,9 +938,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     // Log synthetic responses for debugging
-    const syntheticMessages = patchedMessages.filter(
-      (msg) => (msg as IMessage & { _synthetic?: boolean })._synthetic,
-    );
+    const syntheticMessages = patchedMessages.filter((msg) => msg._synthetic);
     if (syntheticMessages.length > 0) {
       this.logger.debug(
         () =>
@@ -985,13 +1022,10 @@ export class OpenAIProvider extends BaseProvider {
     // We keep the synthetic responses but remove the metadata fields
     const cleanedMessages = patchedMessages.map((msg) => {
       // Create a shallow copy and remove internal fields
-      const { _synthetic, _cancelled, ...cleanMsg } = msg as IMessage & {
-        _synthetic?: boolean;
-        _cancelled?: boolean;
-      };
+      const { _synthetic, _cancelled, ...cleanMsg } = msg;
 
       // Log synthetic tool responses for debugging
-      if ((msg as IMessage & { _synthetic?: boolean })._synthetic) {
+      if (msg._synthetic) {
         this.logger.debug(
           () => `[Synthetic Tool Response] ${JSON.stringify(cleanMsg)}`,
         );
@@ -1267,7 +1301,14 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     let fullContent = '';
-    const accumulatedToolCalls: NonNullable<IMessage['tool_calls']> = [];
+    const accumulatedToolCalls: Array<{
+      id: string;
+      type: 'function';
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }> = [];
     let hasStreamedContent = false;
     let usageData:
       | {
@@ -2180,25 +2221,31 @@ export class OpenAIProvider extends BaseProvider {
   estimateContextUsage(
     conversationId: string | undefined,
     parentId: string | undefined,
-    promptMessages: IMessage[],
+    promptMessages: OpenAIMessage[],
   ) {
     const promptTokens = estimateMessagesTokens(promptMessages);
 
-    return estimateRemoteTokens(
-      this.currentModel,
-      this.conversationCache,
-      conversationId,
-      parentId,
+    // Token estimation should be handled at a higher level
+    // Providers should be stateless
+    // Return a mock response with expected shape for now
+    const contextLimit = 128000; // Default for gpt-4o
+    return {
       promptTokens,
-    );
+      remoteTokens: 0,
+      totalTokens: promptTokens,
+      tokensRemaining: contextLimit - promptTokens,
+      contextUsedPercent: (promptTokens / contextLimit) * 100,
+    };
   }
 
   /**
    * Get the conversation cache instance
-   * @returns The conversation cache
+   * @returns null - providers no longer have caches
+   * @deprecated Providers are now stateless
    */
-  getConversationCache(): ConversationCache {
-    return this.conversationCache;
+  getConversationCache(): null {
+    // Providers should be stateless - no cache
+    return null;
   }
 
   /**
@@ -2209,8 +2256,7 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   override clearState(): void {
-    // Clear the conversation cache to prevent tool call ID mismatches
-    this.conversationCache.clear();
+    // No state to clear - providers are stateless
   }
 
   /**

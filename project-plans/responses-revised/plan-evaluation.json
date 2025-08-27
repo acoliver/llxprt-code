@@ -1,0 +1,61 @@
+{
+  "compliant": false,
+  "has_integration_plan": true,
+  "builds_in_isolation": false,
+  "violations": [
+    "CRITICAL: Plan follows outdated PLAN.md structure from separate analysis/pseudocode/implementation phases instead of the required stub→TDD→impl→verification pattern",
+    "Phases are numbered 01-12 instead of following the required stub→TDD→impl→verification cycle",
+    "Line-numbered pseudocode is provided in separate files but not properly referenced in implementation phases",
+    "Missing property-based testing requirements (30% minimum specified in PLAN.md)",
+    "Missing mutation testing requirements (80% minimum specified in PLAN.md)",
+    "Plan creates new test files instead of updating existing ones where appropriate",
+    "Phases do not follow the required self-contained pattern - they reference external analysis files",
+    "Some phases claim to 'DELETE' files instead of updating them (violates 'All files are UPDATED not created as new versions')",
+    "No behavioral contract verification specified",
+    "Plan structure suggests old methodology rather than current PLAN.md requirements"
+  ],
+  "specific_files_to_modify": [
+    "/packages/core/src/providers/IProvider.ts",
+    "/packages/core/src/providers/openai/OpenAIProvider.ts",
+    "/packages/core/src/providers/anthropic/AnthropicProvider.ts", 
+    "/packages/core/src/providers/gemini/GeminiProvider.ts",
+    "/packages/core/src/providers/openai/parseResponsesStream.ts",
+    "/packages/core/src/providers/openai/buildResponsesRequest.ts",
+    "/packages/core/src/core/contentGenerator.ts",
+    "/packages/cli/src/core/geminiChat.ts"
+  ],
+  "user_access_points": [
+    "CLI: Any command using `/provider openai /model gpt-5` or `/model o3`",
+    "Save/Load: `/chat save` and `/chat load` preserve metadata automatically",
+    "History: Conversation history maintains response IDs in metadata"
+  ],
+  "old_code_to_remove": [
+    "Hardcoded undefined conversation tracking in OpenAIProvider",
+    "All IMessage type imports throughout codebase - Replace with Content[]",
+    "/packages/core/src/providers/IMessage.ts - DELETE completely"
+  ],
+  "pseudocode_used": true,
+  "reverse_testing_found": false,
+  "mutation_testing": false,
+  "property_testing": false,
+  "phases_self_contained": false,
+  "follows_tdd_pattern": false,
+  "detailed_analysis": {
+    "integration_strength": "STRONG - Plan clearly identifies specific existing files that will use the feature and shows how users access it through CLI commands",
+    "isolation_risk": "LOW - Feature integrates with existing sessionId flow from geminiChat and ContentGenerator",
+    "major_issues": [
+      "Plan follows outdated methodology with numbered phases 01-12 instead of required stub→TDD→impl→verification pattern",
+      "Missing critical testing requirements (property-based and mutation testing)",
+      "Phases reference external analysis files instead of being self-contained",
+      "Some violation of 'update don't create' principle with file deletion approach"
+    ],
+    "positive_aspects": [
+      "Excellent integration analysis - identifies specific call chains and user access points",
+      "Clear understanding of existing architecture and integration points",
+      "Detailed specification of exact files to modify and old code to remove",
+      "Good use of line-numbered pseudocode (though not properly integrated with phases)",
+      "Feature does NOT build in isolation - integrates with existing sessionId flow"
+    ]
+  },
+  "recommendation": "REJECT - While the integration plan is excellent, the plan violates multiple core PLAN.md requirements around phase structure, testing requirements, and self-contained phases. The plan needs to be restructured to follow the stub→TDD→impl→verification pattern with proper mutation and property-based testing."
+}

@@ -8,7 +8,6 @@
 export {
   IProvider,
   IModel,
-  IMessage,
   ITool,
   IProviderManager,
   ContentGeneratorRole,

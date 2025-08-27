@@ -159,9 +159,9 @@ gemini-cli
      }
 
      async *generateChatCompletion(
-       messages: IMessage[],
+       messages: Content[],
        tools?: ITool[],
-     ): AsyncIterableIterator<IMessage> {
+     ): AsyncIterableIterator<Content> {
        // Implement streaming chat completion
      }
 

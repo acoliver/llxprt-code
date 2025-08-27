@@ -1,8 +1,8 @@
-import { IMessage } from '../IMessage.js';
+import { Content } from '@google/genai';
 import { ITool } from '../ITool.js';
 
 export interface IChatGenerateParams {
-  messages: IMessage[];
+  messages: Content[];
   tools?: ITool[];
   stream?: boolean;
   conversationId?: string;

@@ -231,10 +231,15 @@ export class AnthropicProvider extends BaseProvider {
     }
   }
 
+  /**
+   * @plan PLAN-20250826-RESPONSES.P05
+   * @requirement REQ-001
+   */
   async *generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
     _toolFormat?: string,
+    _sessionId?: string,
   ): AsyncIterableIterator<Content> {
     const authToken = await this.getAuthToken();
     if (!authToken) {

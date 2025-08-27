@@ -12,7 +12,8 @@
  */
 
 import { Config } from '@vybestack/llxprt-code-core';
-import type { IProvider, IMessage, ITool } from '@vybestack/llxprt-code-core';
+import type { IProvider, ITool } from '@vybestack/llxprt-code-core';
+import type { Content } from '@google/genai';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -37,7 +38,7 @@ class IntegrationMockProvider implements IProvider {
   }
 
   async *generateChatCompletion(
-    messages: IMessage[],
+    messages: Content[],
     tools?: ITool[],
   ): AsyncIterableIterator<unknown> {
     // Simulate realistic streaming response
@@ -167,7 +168,7 @@ export class IntegrationTester {
     const mockProvider = new IntegrationMockProvider('test-provider');
 
     // Generate a conversation (testing basic provider functionality)
-    const messages: IMessage[] = [
+    const messages: Content[] = [
       { role: 'user', content: 'Hello, this is a test message' },
     ];
 
@@ -245,7 +246,7 @@ export class IntegrationTester {
 
     for (const [index, provider] of mockProviders.entries()) {
       try {
-        const messages: IMessage[] = [
+        const messages: Content[] = [
           { role: 'user', content: `Message for provider ${providers[index]}` },
         ];
 
@@ -296,7 +297,7 @@ export class IntegrationTester {
     const mockProvider = new IntegrationMockProvider('privacy-test');
 
     // Generate conversation with sensitive data (basic test)
-    const messages: IMessage[] = [
+    const messages: Content[] = [
       {
         role: 'user',
         content:
@@ -346,7 +347,7 @@ export class IntegrationTester {
 
     // Create several conversations to test basic functionality
     for (let i = 0; i < 5; i++) {
-      const messages: IMessage[] = [
+      const messages: Content[] = [
         {
           role: 'user',
           content: `Test message ${i} - ${'x'.repeat(1000)}`, // Large content
@@ -403,7 +404,7 @@ export class IntegrationTester {
     let errorMessage = '';
 
     try {
-      const messages: IMessage[] = [
+      const messages: Content[] = [
         { role: 'user', content: 'Test message with invalid log path' },
       ];
 
