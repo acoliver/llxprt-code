@@ -237,6 +237,13 @@ export const useGeminiStream = (
     turnCancelledRef.current = true;
     abortControllerRef.current?.abort();
 
+    // Reset the flag shortly after aborting to prevent blocking the next request
+    // The handleUserCancelledEvent will also reset it, but this handles the case
+    // where the user types "continue" before the server event arrives
+    setTimeout(() => {
+      turnCancelledRef.current = false;
+    }, 100);
+
     // Don't add incomplete/partial assistant messages to history
     // These can corrupt the context and cause 400 errors
     if (pendingHistoryItemRef.current) {
@@ -664,6 +671,10 @@ export const useGeminiStream = (
       );
       setIsResponding(false);
       setThought(null); // Reset thought when user cancels
+
+      // CRITICAL: Reset the cancellation flag after handling the cancellation
+      // This prevents the next "continue" from being blocked
+      turnCancelledRef.current = false;
     },
     [
       addItem,
