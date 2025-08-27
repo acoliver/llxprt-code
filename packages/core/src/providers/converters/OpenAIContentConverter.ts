@@ -160,100 +160,11 @@ export class OpenAIContentConverter implements IContentConverter {
       }
     }
 
-    // Fix orphaned tool responses (cancelled tools) before returning
-    const fixedMessages = this.fixOrphanedToolResponses(messages);
+    // Don't fix orphaned tool responses here - handled centrally in useGeminiStream
+    // const fixedMessages = this.fixOrphanedToolResponses(messages);
 
     // Pseudocode line 52: RETURN messages
-    return fixedMessages;
-  }
-
-  /**
-   * Fix orphaned tool responses by injecting synthetic tool calls
-   * This handles cases where tools were cancelled before being sent to the model
-   */
-  private fixOrphanedToolResponses(messages: OpenAIMessage[]): OpenAIMessage[] {
-    // Track all tool_calls IDs we've seen
-    const toolCallIds = new Set<string>();
-
-    // Track orphaned tool responses
-    const orphanedToolResponses: Array<{
-      messageIndex: number;
-      message: OpenAIMessage;
-    }> = [];
-
-    // First pass: collect all tool_calls IDs and identify orphaned tool responses
-    messages.forEach((message, index) => {
-      if (message.tool_calls) {
-        message.tool_calls.forEach((toolCall) => {
-          toolCallIds.add(toolCall.id);
-        });
-      } else if (message.role === 'tool' && message.tool_call_id) {
-        // Check if this tool response has a matching tool call
-        if (!toolCallIds.has(message.tool_call_id)) {
-          // Check if the content indicates cancellation
-          const content = message.content || '';
-          if (
-            content.includes('[Operation Cancelled]') ||
-            content.includes('Tool execution cancelled') ||
-            content.includes('cancelled by user')
-          ) {
-            orphanedToolResponses.push({ messageIndex: index, message });
-          }
-        }
-      }
-    });
-
-    // If no orphaned responses, return as-is
-    if (orphanedToolResponses.length === 0) {
-      return messages;
-    }
-
-    // Second pass: inject synthetic tool_calls for orphaned tool responses
-    const fixedMessages = [...messages];
-
-    orphanedToolResponses.forEach(({ message }) => {
-      // Find or create an assistant message to add the synthetic tool_call
-      let assistantMessageIndex = -1;
-
-      // Look for the last assistant message before the tool response
-      for (let i = fixedMessages.length - 1; i >= 0; i--) {
-        if (fixedMessages[i].role === 'assistant') {
-          assistantMessageIndex = i;
-          break;
-        }
-      }
-
-      if (assistantMessageIndex === -1) {
-        // No assistant message found, create one
-        fixedMessages.unshift({
-          role: 'assistant',
-          tool_calls: [],
-        });
-        assistantMessageIndex = 0;
-      }
-
-      // Ensure the assistant message has tool_calls array
-      const assistantMessage = fixedMessages[assistantMessageIndex];
-      if (!assistantMessage.tool_calls) {
-        assistantMessage.tool_calls = [];
-      }
-
-      // Add synthetic tool_call for the cancelled tool
-      assistantMessage.tool_calls.push({
-        id: message.tool_call_id!,
-        type: 'function',
-        function: {
-          name: 'cancelled_tool', // We don't have the original name, use a placeholder
-          arguments: JSON.stringify({ status: 'cancelled_before_execution' }),
-        },
-      });
-
-      console.debug(
-        `[OpenAIContentConverter] Injected synthetic tool_call for cancelled tool with ID: ${message.tool_call_id}`,
-      );
-    });
-
-    return fixedMessages;
+    return messages;
   }
 
   fromProviderFormat(response: unknown): Content {

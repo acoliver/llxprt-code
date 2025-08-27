@@ -1210,7 +1210,40 @@ export const useGeminiStream = (
 
         if (allToolsCancelled) {
           if (geminiClient) {
-            // We need to manually add the function responses to the history
+            // First, add synthetic tool calls to the last model message
+            // This ensures OpenAI/Anthropic see matching call/response pairs
+            const history = await geminiClient.getHistory();
+            if (history.length > 0) {
+              // Find the last model message (going backwards)
+              for (let i = history.length - 1; i >= 0; i--) {
+                if (history[i].role === 'model') {
+                  // Create synthetic functionCall parts for cancelled tools
+                  const syntheticCalls = toolsToProcess.map((tc) => ({
+                    functionCall: {
+                      id: tc.request.callId,
+                      name: tc.request.name,
+                      args: tc.request.args || {},
+                    },
+                  }));
+
+                  // Add synthetic calls to the model message
+                  if (!history[i].parts) {
+                    history[i].parts = [];
+                  }
+                  history[i].parts!.push(...syntheticCalls);
+
+                  console.log(
+                    `[CANCELLATION] Added ${syntheticCalls.length} synthetic tool calls to model message for cancelled tools`,
+                  );
+
+                  // Update the history with the modified message
+                  geminiClient.setHistory(history);
+                  break;
+                }
+              }
+            }
+
+            // Now add the function responses to the history
             // so the model knows the tools were cancelled.
             const responsesToAdd = toolsToProcess.flatMap(
               (toolCall) => toolCall.response.responseParts,
@@ -1236,6 +1269,47 @@ export const useGeminiStream = (
           );
           markToolsAsSubmitted(callIdsToMarkAsSubmitted);
           continue;
+        }
+
+        // Check if any tools were cancelled (not all)
+        const cancelledTools = toolsToProcess.filter(
+          (tc) => tc.status === 'cancelled',
+        );
+
+        // If we have some cancelled tools (but not all), add synthetic calls for them
+        if (cancelledTools.length > 0 && geminiClient) {
+          const history = await geminiClient.getHistory();
+          if (history.length > 0) {
+            // Find the last model message (going backwards)
+            for (let i = history.length - 1; i >= 0; i--) {
+              if (history[i].role === 'model') {
+                // Create synthetic functionCall parts only for cancelled tools
+                const syntheticCalls = cancelledTools.map((tc) => ({
+                  functionCall: {
+                    id: tc.request.callId,
+                    name: tc.request.name,
+                    args: tc.request.args || {},
+                  },
+                }));
+
+                // Add synthetic calls to the model message
+                if (!history[i].parts) {
+                  history[i].parts = [];
+                }
+                history[i].parts!.push(...syntheticCalls);
+
+                // Update the history with the modified message
+                geminiClient.setHistory(history);
+
+                if (process.env.DEBUG) {
+                  console.log(
+                    `[DEBUG] Added ${syntheticCalls.length} synthetic tool calls for cancelled tools`,
+                  );
+                }
+                break;
+              }
+            }
+          }
         }
 
         const responsesToSend: Part[] = toolsToProcess.map(
