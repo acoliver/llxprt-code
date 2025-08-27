@@ -521,7 +521,7 @@ export const useGeminiStream = (
   );
 
   const handleUserCancelledEvent = useCallback(
-    (userMessageTimestamp: number) => {
+    async (userMessageTimestamp: number) => {
       cancelLogger.debug(
         () => '[CANCEL] User pressed ESC, processing cancellation',
       );
@@ -573,14 +573,57 @@ export const useGeminiStream = (
         console.log('[ESC] Cancelled tool IDs:', cancelledToolIds);
       }
 
-      // CRITICAL FIX: Add synthetic functionResponse parts for cancelled tools
+      // CRITICAL FIX: Add synthetic functionResponse parts for ALL orphaned tool calls
       // This ensures Anthropic/OpenAI see matching tool_result blocks for tool_use blocks
-      if (cancelledToolsInfo.length > 0) {
-        // Create synthetic functionResponse parts for each cancelled tool
-        const syntheticResponses = cancelledToolsInfo.map((tool) => ({
+
+      // Get the current history to find ALL tool calls that need responses
+      const history = await geminiClient.getHistory();
+      const allOrphanedCalls: Array<{ id: string; name: string }> = [];
+
+      // Find the last model message and extract ALL tool calls from it
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'model' && history[i].parts) {
+          for (const part of history[i].parts!) {
+            if (part.functionCall) {
+              const callId =
+                part.functionCall.id ||
+                `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              const callName = part.functionCall.name || 'unknown';
+
+              // Check if this call already has a response in subsequent history
+              let hasResponse = false;
+              for (let j = i + 1; j < history.length; j++) {
+                if (history[j].parts) {
+                  for (const respPart of history[j].parts!) {
+                    if (
+                      respPart.functionResponse &&
+                      (respPart.functionResponse as { id?: string }).id ===
+                        callId
+                    ) {
+                      hasResponse = true;
+                      break;
+                    }
+                  }
+                }
+                if (hasResponse) break;
+              }
+
+              // If no response found, add to orphaned list
+              if (!hasResponse) {
+                allOrphanedCalls.push({ id: callId, name: callName });
+              }
+            }
+          }
+          break; // Only process the last model message
+        }
+      }
+
+      // Add synthetic responses for ALL orphaned calls (including ones we just cancelled)
+      if (allOrphanedCalls.length > 0) {
+        const syntheticResponses = allOrphanedCalls.map((call) => ({
           functionResponse: {
-            id: tool.id,
-            name: tool.name,
+            id: call.id,
+            name: call.name,
             response: {
               error:
                 '[Operation Cancelled] Tool execution was cancelled by user',
@@ -590,15 +633,13 @@ export const useGeminiStream = (
 
         cancelLogger.debug(
           () =>
-            `[CANCEL] Generated ${syntheticResponses.length} synthetic responses`,
+            `[CANCEL] Generated ${syntheticResponses.length} synthetic responses for orphaned calls`,
         );
         cancelLogger.debug(
-          () =>
-            `[CANCEL] Synthetic responses: ${JSON.stringify(syntheticResponses)}`,
+          () => `[CANCEL] Orphaned calls: ${JSON.stringify(allOrphanedCalls)}`,
         );
 
         // Add the synthetic responses to the conversation history
-        // This ensures the model knows these tools were cancelled
         cancelLogger.debug(
           () =>
             '[CANCEL] Adding synthetic responses to history via geminiClient.addHistory()',
@@ -610,7 +651,7 @@ export const useGeminiStream = (
 
         cancelLogger.debug(
           () =>
-            '[CANCEL] Successfully added synthetic responses to conversation history',
+            '[CANCEL] Successfully added synthetic responses for all orphaned tool calls',
         );
       }
 
