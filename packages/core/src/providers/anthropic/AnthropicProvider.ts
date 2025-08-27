@@ -285,8 +285,8 @@ export class AnthropicProvider extends BaseProvider {
 
       let finalMessages = anthropicMessages;
 
-      if (isOAuth && systemMessage && anthropicMessages.length === 0) {
-        // In OAuth mode, inject system prompts as conversation content for first message
+      if (isOAuth && systemMessage) {
+        // In OAuth mode, inject system prompts as conversation content
         const contextMessage = `Important context for using llxprt tools:
 
 Tool Parameter Reference:
