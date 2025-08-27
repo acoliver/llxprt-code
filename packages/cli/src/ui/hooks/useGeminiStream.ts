@@ -530,13 +530,22 @@ export const useGeminiStream = (
   const handleUserCancelledEvent = useCallback(
     async (userMessageTimestamp: number) => {
       cancelLogger.debug(
-        () => '[CANCEL] User pressed ESC, processing cancellation',
+        () =>
+          `[CANCEL] handleUserCancelledEvent called, turnCancelledRef=${turnCancelledRef.current}`,
       );
 
       if (turnCancelledRef.current) {
-        cancelLogger.debug(() => '[CANCEL] Turn already cancelled, skipping');
+        cancelLogger.debug(
+          () => '[CANCEL] Turn already cancelled, skipping duplicate event',
+        );
+        console.warn(
+          '[CANCEL] Duplicate UserCancelled event received, ignoring',
+        );
         return;
       }
+
+      // Mark as cancelled to prevent duplicate processing
+      turnCancelledRef.current = true;
 
       // Track cancelled tool IDs and names for synthetic response generation
       const cancelledToolIds: string[] = [];
