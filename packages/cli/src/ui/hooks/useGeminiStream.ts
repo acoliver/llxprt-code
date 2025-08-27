@@ -596,6 +596,12 @@ export const useGeminiStream = (
       const history = await geminiClient.getHistory();
       const allOrphanedCalls: Array<{ id: string; name: string }> = [];
 
+      if (process.env.DEBUG) {
+        console.log(
+          `[CANCEL] Scanning history with ${history.length} entries for orphaned tool calls`,
+        );
+      }
+
       // Find ALL model messages and extract ALL tool calls from them
       for (let i = 0; i < history.length; i++) {
         if (history[i].role === 'model' && history[i].parts) {
@@ -635,6 +641,13 @@ export const useGeminiStream = (
 
       // Add synthetic responses for ALL orphaned calls (including ones we just cancelled)
       if (allOrphanedCalls.length > 0) {
+        if (process.env.DEBUG) {
+          console.log(
+            `[CANCEL] Found ${allOrphanedCalls.length} orphaned tool calls:`,
+            allOrphanedCalls,
+          );
+        }
+
         const syntheticResponses = allOrphanedCalls.map((call) => ({
           functionResponse: {
             id: call.id,
@@ -668,6 +681,19 @@ export const useGeminiStream = (
           () =>
             '[CANCEL] Successfully added synthetic responses for all orphaned tool calls',
         );
+
+        if (process.env.DEBUG) {
+          console.log(
+            `[CANCEL] Added ${syntheticResponses.length} synthetic responses to history`,
+          );
+          // Verify they were added
+          const updatedHistory = await geminiClient.getHistory();
+          console.log(
+            `[CANCEL] History now has ${updatedHistory.length} entries`,
+          );
+        }
+      } else if (process.env.DEBUG) {
+        console.log('[CANCEL] No orphaned tool calls found');
       }
 
       addItem(
