@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { DebugLogger } from '../debug/index.js';
+
 // DISCLAIMER: This is a copied version of https://github.com/googleapis/js-genai/blob/main/src/chats.ts with the intention of working around a key bug
 // where function responses are not treated as "valid" responses: https://b.corp.google.com/issues/420354090
 
@@ -225,6 +227,7 @@ export class GeminiChat {
   // A promise to represent the current state of the message being sent to the
   // model.
   private sendPromise: Promise<void> = Promise.resolve();
+  private logger: DebugLogger;
 
   constructor(
     private readonly config: Config,
@@ -233,6 +236,7 @@ export class GeminiChat {
     private history: Content[] = [],
   ) {
     validateHistory(history);
+    this.logger = new DebugLogger('llxprt:core:geminiChat');
   }
 
   private _getRequestTextFromContents(contents: Content[]): string {
@@ -370,6 +374,111 @@ export class GeminiChat {
       params.message,
     );
     const requestContents = this.getHistory(true).concat(userContent);
+
+    // Fix orphaned tool calls (non-streaming version) - same logic as streaming
+    const toolCalls = new Map<string, { name: string; messageIndex: number }>();
+    const toolResponses = new Set<string>();
+
+    // Scan BACKWARDS from the end until we find a tool response (then stop)
+    let foundToolResponse = false;
+    for (
+      let idx = requestContents.length - 1;
+      idx >= 0 && !foundToolResponse;
+      idx--
+    ) {
+      const content = requestContents[idx];
+
+      // Check for tool responses in user messages
+      if (content.role === 'user' && content.parts) {
+        for (const part of content.parts) {
+          if ('functionResponse' in part && part.functionResponse) {
+            const responseId = (part.functionResponse as { id?: string }).id;
+            if (responseId) {
+              toolResponses.add(responseId);
+              foundToolResponse = true; // Stop scanning - everything before this is already paired
+            }
+          }
+        }
+      }
+
+      // Track tool calls in model messages (only if we haven't found a response yet)
+      if (!foundToolResponse && content.role === 'model' && content.parts) {
+        for (const part of content.parts) {
+          if ('functionCall' in part && part.functionCall?.id) {
+            toolCalls.set(part.functionCall.id, {
+              name: part.functionCall.name || 'unknown',
+              messageIndex: idx,
+            });
+          }
+        }
+      }
+    }
+
+    // Find orphaned calls (tool calls without matching responses)
+    const orphanedCalls: Array<{
+      id: string;
+      name: string;
+      messageIndex: number;
+    }> = [];
+    for (const [id, info] of toolCalls) {
+      if (!toolResponses.has(id)) {
+        orphanedCalls.push({
+          id,
+          name: info.name,
+          messageIndex: info.messageIndex,
+        });
+      }
+    }
+
+    if (orphanedCalls.length > 0) {
+      this.logger.debug(
+        () =>
+          `[sendMessage] Found ${orphanedCalls.length} orphaned tool call(s), inserting synthetic responses`,
+      );
+
+      // Sort by messageIndex DESCENDING to insert back-to-front
+      orphanedCalls.sort((a, b) => b.messageIndex - a.messageIndex);
+
+      // Insert synthetic responses back-to-front (so indices don't shift)
+      for (const orphan of orphanedCalls) {
+        this.logger.debug(
+          () =>
+            `  - Fixing orphan: ID=${orphan.id}, Name=${orphan.name}, Index=${orphan.messageIndex}`,
+        );
+
+        const syntheticResponse: Content = {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                id: orphan.id,
+                name: orphan.name,
+                response: {
+                  error:
+                    '[Operation Cancelled] Tool call was interrupted by user',
+                },
+              },
+            },
+          ],
+        };
+
+        // Insert RIGHT AFTER the model message with the orphaned call
+        requestContents.splice(orphan.messageIndex + 1, 0, syntheticResponse);
+      }
+
+      // Also update the actual history to make this permanent
+      const historyWithSynthetics = requestContents.slice(0, -1);
+      this.history = historyWithSynthetics;
+
+      this.logger.debug(
+        () =>
+          `[sendMessage] Fixed ${orphanedCalls.length} orphaned tool calls in history`,
+      );
+      this.logger.debug(
+        () =>
+          `[sendMessage] Updated requestContents now has ${requestContents.length} messages`,
+      );
+    }
 
     this._logApiRequest(requestContents, this.config.getModel(), prompt_id);
 
@@ -550,6 +659,111 @@ export class GeminiChat {
       );
     }
     const requestContents = this.getHistory(true).concat(userContent);
+
+    // Fix orphaned tool calls by scanning backwards and inserting synthetic responses
+    const toolCalls = new Map<string, { name: string; messageIndex: number }>();
+    const toolResponses = new Set<string>();
+
+    // Scan BACKWARDS from the end until we find a tool response (then stop)
+    let foundToolResponse = false;
+    for (
+      let idx = requestContents.length - 1;
+      idx >= 0 && !foundToolResponse;
+      idx--
+    ) {
+      const content = requestContents[idx];
+
+      // Check for tool responses in user messages
+      if (content.role === 'user' && content.parts) {
+        for (const part of content.parts) {
+          if ('functionResponse' in part && part.functionResponse) {
+            const responseId = (part.functionResponse as { id?: string }).id;
+            if (responseId) {
+              toolResponses.add(responseId);
+              foundToolResponse = true; // Stop scanning - everything before this is already paired
+            }
+          }
+        }
+      }
+
+      // Track tool calls in model messages (only if we haven't found a response yet)
+      if (!foundToolResponse && content.role === 'model' && content.parts) {
+        for (const part of content.parts) {
+          if ('functionCall' in part && part.functionCall?.id) {
+            toolCalls.set(part.functionCall.id, {
+              name: part.functionCall.name || 'unknown',
+              messageIndex: idx,
+            });
+          }
+        }
+      }
+    }
+
+    // Find orphaned calls (tool calls without matching responses)
+    const orphanedCalls: Array<{
+      id: string;
+      name: string;
+      messageIndex: number;
+    }> = [];
+    for (const [id, info] of toolCalls) {
+      if (!toolResponses.has(id)) {
+        orphanedCalls.push({
+          id,
+          name: info.name,
+          messageIndex: info.messageIndex,
+        });
+      }
+    }
+
+    if (orphanedCalls.length > 0) {
+      this.logger.debug(
+        () =>
+          `Found ${orphanedCalls.length} orphaned tool call(s), inserting synthetic responses`,
+      );
+
+      // Sort by messageIndex DESCENDING to insert back-to-front
+      orphanedCalls.sort((a, b) => b.messageIndex - a.messageIndex);
+
+      // Insert synthetic responses back-to-front (so indices don't shift)
+      for (const orphan of orphanedCalls) {
+        this.logger.debug(
+          () =>
+            `  - Fixing orphan: ID=${orphan.id}, Name=${orphan.name}, Index=${orphan.messageIndex}`,
+        );
+
+        const syntheticResponse: Content = {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                id: orphan.id,
+                name: orphan.name,
+                response: {
+                  error:
+                    '[Operation Cancelled] Tool call was interrupted by user',
+                },
+              },
+            },
+          ],
+        };
+
+        // Insert RIGHT AFTER the model message with the orphaned call
+        requestContents.splice(orphan.messageIndex + 1, 0, syntheticResponse);
+      }
+
+      // Also update the actual history to make this permanent
+      // Remove the user's new message from the end, update history, then re-add it
+      const historyWithSynthetics = requestContents.slice(0, -1); // Everything except the last user message
+      this.history = historyWithSynthetics;
+
+      this.logger.debug(
+        () => `Fixed ${orphanedCalls.length} orphaned tool calls in history`,
+      );
+      this.logger.debug(
+        () =>
+          `Updated requestContents now has ${requestContents.length} messages`,
+      );
+    }
 
     // Apply max-prompt-tokens limit if configured
     const ephemeralSettings = this.config.getEphemeralSettings();
