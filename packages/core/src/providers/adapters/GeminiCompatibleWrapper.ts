@@ -326,13 +326,10 @@ export class GeminiCompatibleWrapper {
       }
     }
 
-    // TEMPORARILY DISABLED: The orphaned tool call detection is broken
-    // It incorrectly identifies valid tool calls as orphaned and inserts
-    // synthetic responses that shift indices and break valid pairs
-    // TODO: Fix the detection logic to properly track call/response pairs
-    // if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
-    //   contents = this.fixOrphanedToolCallsAndResponses(contents);
-    // }
+    // Fix orphaned tool calls for providers that require strict pairing
+    if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
+      contents = this.fixOrphanedToolCalls(contents);
+    }
 
     /**
      * @plan PLAN-20250826-RESPONSES.P05
@@ -495,13 +492,10 @@ export class GeminiCompatibleWrapper {
       }
     }
 
-    // TEMPORARILY DISABLED: The orphaned tool call detection is broken
-    // It incorrectly identifies valid tool calls as orphaned and inserts
-    // synthetic responses that shift indices and break valid pairs
-    // TODO: Fix the detection logic to properly track call/response pairs
-    // if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
-    //   contents = this.fixOrphanedToolCallsAndResponses(contents);
-    // }
+    // Fix orphaned tool calls for providers that require strict pairing
+    if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
+      contents = this.fixOrphanedToolCalls(contents);
+    }
 
     // Extract and convert tools from config if available
     let providerTools: ProviderTool[] | undefined;
@@ -1055,6 +1049,92 @@ export class GeminiCompatibleWrapper {
     }
 
     return response;
+  }
+
+  /**
+   * Fix orphaned tool calls by adding synthetic responses
+   * This ensures OpenAI and Anthropic APIs receive matching call/response pairs
+   * @param contents The conversation history
+   * @returns Fixed conversation history with synthetic responses appended
+   */
+  private fixOrphanedToolCalls(contents: Content[]): Content[] {
+    this.logger.debug(() => '[WRAPPER] Checking for orphaned tool calls');
+
+    // Track all tool calls and responses
+    const toolCalls = new Map<string, { name: string; modelIndex: number }>();
+    const toolResponses = new Set<string>();
+
+    // First pass: identify all tool calls and responses
+    contents.forEach((content, idx) => {
+      if (content.role === 'model' && content.parts) {
+        content.parts.forEach((part: Part) => {
+          if (
+            'functionCall' in part &&
+            part.functionCall?.id &&
+            part.functionCall?.name
+          ) {
+            toolCalls.set(part.functionCall.id, {
+              name: part.functionCall.name,
+              modelIndex: idx,
+            });
+          }
+        });
+      }
+
+      if (content.role === 'user' && content.parts) {
+        content.parts.forEach((part: Part) => {
+          if ('functionResponse' in part) {
+            const responseId = (part.functionResponse as { id?: string }).id;
+            if (responseId) {
+              toolResponses.add(responseId);
+            }
+          }
+        });
+      }
+    });
+
+    // Identify orphaned tool calls (calls without responses)
+    const orphanedCalls: Array<{ id: string; name: string }> = [];
+    for (const [id, info] of toolCalls) {
+      if (!toolResponses.has(id)) {
+        orphanedCalls.push({ id, name: info.name });
+        this.logger.debug(
+          () =>
+            `[WRAPPER] Found orphaned tool call: id=${id}, name=${info.name}`,
+        );
+      }
+    }
+
+    // If no orphaned calls, return contents as-is
+    if (orphanedCalls.length === 0) {
+      return contents;
+    }
+
+    // Create a single user message with all synthetic responses
+    // This avoids index shifting issues
+    const syntheticParts: Part[] = orphanedCalls.map((call) => ({
+      functionResponse: {
+        id: call.id,
+        name: call.name,
+        response: {
+          error: '[Operation Cancelled] Tool call was interrupted by user',
+        },
+      },
+    }));
+
+    const syntheticResponse: Content = {
+      role: 'user',
+      parts: syntheticParts,
+    };
+
+    this.logger.debug(
+      () =>
+        `[WRAPPER] Adding synthetic responses for ${orphanedCalls.length} orphaned tool calls`,
+    );
+
+    // Return contents with synthetic response appended at the end
+    // This maintains the original order and doesn't break indices
+    return [...contents, syntheticResponse];
   }
 
   /**
