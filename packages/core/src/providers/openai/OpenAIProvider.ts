@@ -28,6 +28,7 @@ import { IModel } from '../IModel.js';
 import { ITool } from '../ITool.js';
 import { ContentGeneratorRole } from '../ContentGeneratorRole.js';
 import { GemmaToolCallParser } from '../../parsers/TextToolCallParser.js';
+import { retryWithBackoff } from '../../utils/retry.js';
 import { ToolFormatter } from '../../tools/ToolFormatter.js';
 import { ToolFormat } from '../../tools/IToolFormatter.js';
 import OpenAI from 'openai';
@@ -451,18 +452,51 @@ export class OpenAIProvider extends BaseProvider {
     // Ensure proper UTF-8 encoding for the request body
     // This is crucial for handling multibyte characters (e.g., Japanese, Chinese)
     const requestBody = JSON.stringify(request);
-    const bodyBlob = new Blob([requestBody], {
-      type: 'application/json; charset=utf-8',
-    });
 
-    const response = await fetch(responsesURL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json; charset=utf-8',
+    // Wrap the fetch call with retry logic for transient errors
+    const response = await retryWithBackoff(
+      async () => {
+        const res = await fetch(responsesURL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json; charset=utf-8',
+            // Add Accept header for SSE streaming
+            ...(options?.stream ? { Accept: 'text/event-stream' } : {}),
+          },
+          // Use plain string body for Node.js compatibility (Blob is not standard in Node)
+          body: requestBody,
+        });
+
+        // Check for retryable errors before returning
+        if (
+          !res.ok &&
+          (res.status === 429 || (res.status >= 500 && res.status < 600))
+        ) {
+          const errorBody = await res.text();
+          const error = new Error(
+            `HTTP ${res.status}: ${errorBody}`,
+          ) as Error & { status: number };
+          error.status = res.status;
+          throw error;
+        }
+
+        return res;
       },
-      body: bodyBlob,
-    });
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1000,
+        maxDelayMs: 10000,
+        shouldRetry: (error: Error) => {
+          // Retry on 429 (rate limit) and 5xx errors
+          const status = (error as Error & { status?: number }).status;
+          return (
+            status === 429 ||
+            (status !== undefined && status >= 500 && status < 600)
+          );
+        },
+      },
+    );
 
     // Handle errors
     if (!response.ok) {
@@ -493,18 +527,50 @@ export class OpenAIProvider extends BaseProvider {
 
         // Ensure proper UTF-8 encoding for retry request as well
         const retryRequestBody = JSON.stringify(retryRequest);
-        const retryBodyBlob = new Blob([retryRequestBody], {
-          type: 'application/json; charset=utf-8',
-        });
 
-        const retryResponse = await fetch(responsesURL, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json; charset=utf-8',
+        // Also wrap the retry request with retry logic
+        const retryResponse = await retryWithBackoff(
+          async () => {
+            const res = await fetch(responsesURL, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json; charset=utf-8',
+                // Add Accept header for SSE streaming
+                ...(options?.stream ? { Accept: 'text/event-stream' } : {}),
+              },
+              // Use plain string body for Node.js compatibility
+              body: retryRequestBody,
+            });
+
+            // Check for retryable errors before returning
+            if (
+              !res.ok &&
+              (res.status === 429 || (res.status >= 500 && res.status < 600))
+            ) {
+              const errorBody = await res.text();
+              const error = new Error(
+                `HTTP ${res.status}: ${errorBody}`,
+              ) as Error & { status: number };
+              error.status = res.status;
+              throw error;
+            }
+
+            return res;
           },
-          body: retryBodyBlob,
-        });
+          {
+            maxAttempts: 3,
+            initialDelayMs: 1000,
+            maxDelayMs: 10000,
+            shouldRetry: (error: Error) => {
+              const status = (error as Error & { status?: number }).status;
+              return (
+                status === 429 ||
+                (status !== undefined && status >= 500 && status < 600)
+              );
+            },
+          },
+        );
 
         if (!retryResponse.ok) {
           const retryErrorBody = await retryResponse.text();

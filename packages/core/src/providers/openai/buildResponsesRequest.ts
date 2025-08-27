@@ -286,8 +286,12 @@ export function buildResponsesRequest(
   // Map conversation fields for stateful mode
   // Note: conversationId is not used by Responses API (can't be passed)
   if (parentId) {
-    request.store = true; // Store this response for future continuation
+    // Always store when we have a parentId (continuing a conversation)
+    request.store = true;
     request.previous_response_id = parentId;
+  } else if (stateful) {
+    // Also store in stateful mode even without parentId (starting new conversation)
+    request.store = true;
   }
 
   // Add tools if provided
