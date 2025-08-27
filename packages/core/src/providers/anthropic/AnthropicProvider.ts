@@ -25,6 +25,7 @@ export class AnthropicProvider extends BaseProvider {
   private currentModel: string = 'claude-sonnet-4-20250514'; // Default model
   private modelParams?: Record<string, unknown>;
   private temporarySystemInstruction?: string;
+  private _cachedAuthKey?: string; // Track cached auth key for client recreation
 
   // Model cache for latest resolution
   private modelCache: { models: IModel[]; timestamp: number } | null = null;
@@ -61,7 +62,6 @@ export class AnthropicProvider extends BaseProvider {
       name: 'anthropic',
       apiKey,
       baseURL,
-      cliKey: !apiKey || apiKey === '' ? undefined : apiKey,
       envKeyNames: ['ANTHROPIC_API_KEY'],
       isOAuthEnabled: !!oauthManager,
       oauthProvider: oauthManager ? 'anthropic' : undefined,
@@ -96,39 +96,47 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   /**
+   * @plan:PLAN-20250823-AUTHFIXES.P15
+   * @requirement:REQ-004
    * Update the Anthropic client with resolved authentication if needed
    */
   private async updateClientWithResolvedAuth(): Promise<void> {
     const resolvedToken = await this.getAuthToken();
     if (!resolvedToken) {
-      throw new Error('No authentication available for Anthropic API calls');
+      throw new Error(
+        'No authentication available for Anthropic API calls. Use /auth anthropic to re-authenticate or /auth anthropic logout to clear any expired session.',
+      );
     }
 
-    // Check if this is an OAuth token (starts with sk-ant-oat)
-    const isOAuthToken = resolvedToken.startsWith('sk-ant-oat');
+    // Only recreate client if auth changed
+    if (this._cachedAuthKey !== resolvedToken) {
+      // Check if this is an OAuth token (starts with sk-ant-oat)
+      const isOAuthToken = resolvedToken.startsWith('sk-ant-oat');
 
-    if (isOAuthToken) {
-      // For OAuth tokens, use authToken field which sends Bearer token
-      // Don't pass apiKey at all - just authToken
-      const oauthConfig: Record<string, unknown> = {
-        authToken: resolvedToken, // Use authToken for OAuth Bearer tokens
-        baseURL: this.baseURL,
-        dangerouslyAllowBrowser: true,
-        defaultHeaders: {
-          'anthropic-beta': 'oauth-2025-04-20', // Still need the beta header
-        },
-      };
+      if (isOAuthToken) {
+        // For OAuth tokens, use authToken field which sends Bearer token
+        // Don't pass apiKey at all - just authToken
+        const oauthConfig: Record<string, unknown> = {
+          authToken: resolvedToken, // Use authToken for OAuth Bearer tokens
+          baseURL: this.baseURL,
+          dangerouslyAllowBrowser: true,
+          defaultHeaders: {
+            'anthropic-beta': 'oauth-2025-04-20', // Still need the beta header
+          },
+        };
 
-      this.anthropic = new Anthropic(oauthConfig as ClientOptions);
-    } else {
-      // Regular API key auth
-      if (this.anthropic.apiKey !== resolvedToken) {
+        this.anthropic = new Anthropic(oauthConfig as ClientOptions);
+      } else {
+        // Regular API key auth
         this.anthropic = new Anthropic({
           apiKey: resolvedToken,
           baseURL: this.baseURL,
           dangerouslyAllowBrowser: true,
         });
       }
+
+      // Track the key to avoid unnecessary client recreation
+      this._cachedAuthKey = resolvedToken;
     }
   }
 
@@ -1140,6 +1148,14 @@ ${systemMessage}`;
     systemInstruction: string | undefined,
   ): void {
     this.temporarySystemInstruction = systemInstruction;
+  }
+
+  /**
+   * Override clearAuthCache to also clear cached auth key
+   */
+  override clearAuthCache(): void {
+    super.clearAuthCache();
+    this._cachedAuthKey = undefined;
   }
 
   /**

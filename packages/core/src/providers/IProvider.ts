@@ -71,6 +71,16 @@ export interface IProvider {
    * @param systemInstruction The system instruction to use, or undefined to clear
    */
   setTemporarySystemInstruction?(systemInstruction: string | undefined): void;
+
+  /**
+   * Clear authentication cache (for OAuth logout)
+   */
+  clearAuthCache?(): void;
+
+  /**
+   * Clear authentication settings (keys and keyfiles)
+   */
+  clearAuth?(): void;
 }
 
 // Re-export the interfaces for convenience

@@ -106,8 +106,8 @@ export class MultiProviderTokenStore implements TokenStore {
       // Validate token structure
       const validatedToken = OAuthTokenSchema.parse(parsed);
       return validatedToken;
-    } catch {
-      // Return null for any error (file not found, invalid JSON, validation failure, etc.)
+    } catch (_error) {
+      // Token not found
       return null;
     }
   }

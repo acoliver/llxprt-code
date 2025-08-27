@@ -72,7 +72,6 @@ export class GeminiProvider extends BaseProvider {
       name: 'gemini',
       apiKey,
       baseURL,
-      cliKey: apiKey, // CLI --key argument
       envKeyNames: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
       isOAuthEnabled: false, // OAuth enablement will be checked dynamically
       oauthProvider: 'gemini',
@@ -122,18 +121,31 @@ export class GeminiProvider extends BaseProvider {
     try {
       const token = await this.getAuthToken();
 
-      // Check for special OAuth signal
-      if (token === 'USE_LOGIN_WITH_GOOGLE') {
+      // Check if OAuth is enabled for Gemini but no token was returned
+      // This signals to use the existing LOGIN_WITH_GOOGLE flow
+      const authMethodName = await this.getAuthMethodName();
+      const manager = this.geminiOAuthManager as OAuthManager & {
+        isOAuthEnabled?(provider: string): boolean;
+      };
+      const isOAuthEnabled =
+        manager?.isOAuthEnabled &&
+        typeof manager.isOAuthEnabled === 'function' &&
+        manager.isOAuthEnabled('gemini');
+
+      // CRITICAL FIX: Only use LOGIN_WITH_GOOGLE if OAuth is actually enabled
+      // Don't fall back to it when OAuth is disabled
+      if (
+        isOAuthEnabled &&
+        (authMethodName?.startsWith('oauth-') ||
+          (this.geminiOAuthManager && !token))
+      ) {
         this.authMode = 'oauth';
-        return token; // Return the magic token
+        // Return a special token for OAuth mode
+        return 'USE_LOGIN_WITH_GOOGLE';
       }
 
       // Determine auth mode based on resolved authentication method
-      const authMethodName = await this.getAuthMethodName();
-
-      if (authMethodName?.startsWith('oauth-')) {
-        this.authMode = 'oauth';
-      } else if (this.hasVertexAICredentials()) {
+      if (this.hasVertexAICredentials()) {
         this.authMode = 'vertex-ai';
         this.setupVertexAIAuth();
       } else if (this.hasGeminiAPIKey() || authMethodName?.includes('key')) {
@@ -144,6 +156,22 @@ export class GeminiProvider extends BaseProvider {
 
       return token;
     } catch (error) {
+      // CRITICAL FIX: Only fall back to LOGIN_WITH_GOOGLE if OAuth is actually enabled
+      // Don't use it when OAuth has been disabled
+      const manager = this.geminiOAuthManager as OAuthManager & {
+        isOAuthEnabled?(provider: string): boolean;
+      };
+      const isOAuthEnabled =
+        this.geminiOAuthManager &&
+        manager.isOAuthEnabled &&
+        typeof manager.isOAuthEnabled === 'function' &&
+        manager.isOAuthEnabled('gemini');
+
+      if (isOAuthEnabled) {
+        this.authMode = 'oauth';
+        return 'USE_LOGIN_WITH_GOOGLE';
+      }
+
       // Handle case where no auth is available
       const authType = this.geminiConfig?.getContentGeneratorConfig()?.authType;
       if (authType === AuthType.USE_NONE) {
@@ -163,8 +191,21 @@ export class GeminiProvider extends BaseProvider {
    * Determines if this provider supports OAuth authentication
    */
   protected supportsOAuth(): boolean {
-    // Gemini always supports Google OAuth
-    return true;
+    // Check if OAuth is actually enabled for Gemini in the OAuth manager
+    const manager = this.geminiOAuthManager as OAuthManager & {
+      isOAuthEnabled?(provider: string): boolean;
+    };
+
+    if (
+      manager?.isOAuthEnabled &&
+      typeof manager.isOAuthEnabled === 'function'
+    ) {
+      return manager.isOAuthEnabled('gemini');
+    }
+
+    // Default to false if OAuth manager is not available
+    // This ensures we don't fall back to LOGIN_WITH_GOOGLE when OAuth is disabled
+    return false;
   }
 
   /**
@@ -668,9 +709,15 @@ export class GeminiProvider extends BaseProvider {
     super.setApiKey?.(apiKey);
 
     // Set the API key as an environment variable so it can be used by the core library
-    process.env.GEMINI_API_KEY = apiKey;
+    // CRITICAL FIX: When clearing the key (empty string), delete the env var instead of setting to empty
+    if (apiKey && apiKey.trim() !== '') {
+      process.env.GEMINI_API_KEY = apiKey;
+    } else {
+      delete process.env.GEMINI_API_KEY;
+    }
 
     // Clear auth cache when API key changes
+    this.clearAuthCache();
   }
 
   override setBaseUrl(baseUrl?: string): void {
@@ -801,11 +848,22 @@ export class GeminiProvider extends BaseProvider {
   }
 
   /**
+   * Clear all authentication including environment variable
+   */
+  override clearAuth(): void {
+    // Call base implementation to clear SettingsService
+    super.clearAuth?.();
+    // CRITICAL: Also clear the environment variable that setApiKey sets
+    delete process.env.GEMINI_API_KEY;
+  }
+
+  /**
    * Forces re-determination of auth method
    */
   override clearAuthCache(): void {
-    // Don't clear the auth mode itself, just the determination flag
-    // This allows for smoother transitions
+    // Call the base implementation to clear the cached token
+    super.clearAuthCache();
+    // Don't clear the auth mode itself, just allow re-determination next time
   }
 
   /**

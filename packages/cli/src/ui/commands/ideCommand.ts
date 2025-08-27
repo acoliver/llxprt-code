@@ -173,6 +173,41 @@ export const ideCommand = (config: Config | null): SlashCommand | null => {
         },
         Date.now(),
       );
+      if (result.success) {
+        context.services.settings.setValue(SettingScope.User, 'ideMode', true);
+        // Poll for up to 5 seconds for the extension to activate.
+        for (let i = 0; i < 10; i++) {
+          config.setIdeMode(true);
+          await ideClient.connect();
+          if (
+            ideClient.getConnectionStatus().status ===
+            IDEConnectionStatus.Connected
+          ) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+
+        const { messageType, content } =
+          await getIdeStatusMessageWithFiles(ideClient);
+        if (messageType === 'error') {
+          context.ui.addItem(
+            {
+              type: messageType,
+              text: `Failed to automatically enable IDE integration. To fix this, run the CLI in a new terminal window.`,
+            },
+            Date.now(),
+          );
+        } else {
+          context.ui.addItem(
+            {
+              type: messageType,
+              text: content,
+            },
+            Date.now(),
+          );
+        }
+      }
     },
   };
 

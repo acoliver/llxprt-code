@@ -237,6 +237,7 @@ export const useGeminiStream = (
     }
     turnCancelledRef.current = true;
     abortControllerRef.current?.abort();
+    setThought(null); // Reset thought when user cancels
 
     // Don't reset the flag here - let handleUserCancelledEvent do it
     // This prevents duplicate cancellation processing
@@ -252,11 +253,10 @@ export const useGeminiStream = (
       ) {
         // Check if the message has meaningful content
         if (pendingItem.text && pendingItem.text.trim().length > 0) {
-          // Add the partial response with a cancellation marker
+          // Add the partial response without cancellation marker to preserve clean content
           addItem(
             {
               ...pendingItem,
-              text: pendingItem.text + '\n\n[Response cancelled by user]',
             },
             Date.now(),
           );
@@ -410,6 +410,13 @@ export const useGeminiStream = (
             messageId: userMessageTimestamp,
             signal: abortSignal,
           });
+
+          // Add user's turn after @ command processing is done.
+          addItem(
+            { type: MessageType.USER, text: trimmedQuery },
+            userMessageTimestamp,
+          );
+
           if (!atCommandResult.shouldProceed) {
             return { queryToSend: null, shouldProceed: false };
           }
@@ -458,7 +465,8 @@ export const useGeminiStream = (
     ): string => {
       if (turnCancelledRef.current) {
         // Prevents additional output after a user initiated cancel.
-        return '';
+        // Return the current buffer unchanged to preserve existing content
+        return currentGeminiMessageBuffer;
       }
       let newGeminiMessageBuffer = currentGeminiMessageBuffer + eventValue;
 
@@ -612,6 +620,8 @@ export const useGeminiStream = (
         setPendingHistoryItem(null);
       }
 
+      setThought(null); // Reset thought when there is an error
+
       const errorText = parseAndFormatApiError(
         eventValue.error,
         config.getContentGeneratorConfig()?.authType,
@@ -682,7 +692,7 @@ export const useGeminiStream = (
         addItem(
           {
             type: 'info',
-            text: `WARNING: ${message}`,
+            text: `⚠️  ${message}`,
           },
           userMessageTimestamp,
         );
@@ -820,6 +830,11 @@ export const useGeminiStream = (
               queuedSystemFeedbackRef.current.push(
                 `<system-reminder>${filterResult.systemFeedback}</system-reminder>`,
               );
+            }
+
+            // If cancelled after processing this content event, stop further processing
+            if (turnCancelledRef.current) {
+              break;
             }
             break;
           }

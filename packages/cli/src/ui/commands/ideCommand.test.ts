@@ -182,6 +182,7 @@ describe('ideCommand', () => {
           status: core.IDEConnectionStatus.Disconnected,
         }),
         getDetectedIdeDisplayName: () => 'VS Code',
+        connect: vi.fn(),
       } as unknown as ReturnType<Config['getIdeClient']>);
       vi.mocked(core.getIdeInstaller).mockReturnValue({
         install: mockInstall,
@@ -218,7 +219,7 @@ describe('ideCommand', () => {
         }),
         expect.any(Number),
       );
-    });
+    }, 10000);
 
     it('should show an error if installation fails', async () => {
       mockInstall.mockResolvedValue({

@@ -79,6 +79,18 @@ export class OAuthManager {
     }
 
     this.providers.set(provider.name, provider);
+
+    // Trigger lazy initialization of the provider in the background to preload any stored tokens
+    // This ensures the provider is ready for use but doesn't block registration
+    // Use fire-and-forget pattern but with proper error handling
+    void provider.getToken().catch((error) => {
+      // Initialization failures shouldn't prevent registration
+      // The provider will work in memory-only mode
+      console.debug(
+        `Provider ${provider.name} initialization failed during registration:`,
+        error,
+      );
+    });
   }
 
   /**
@@ -142,11 +154,8 @@ export class OAuthManager {
 
         if (token) {
           // Provider is authenticated, calculate time until expiry
-          const now = Date.now();
-          const expiresIn = Math.max(
-            0,
-            Math.floor((token.expiry - now) / 1000),
-          ); // seconds
+          const now = Date.now() / 1000; // Convert to seconds to match token.expiry
+          const expiresIn = Math.max(0, Math.floor(token.expiry - now)); // seconds
 
           statuses.push({
             provider: providerName,
@@ -180,20 +189,130 @@ export class OAuthManager {
   }
 
   /**
+   * @plan PLAN-20250823-AUTHFIXES.P14
+   * @requirement REQ-002
+   * @pseudocode lines 51-68
    * Check if authenticated with a specific provider (required by precedence resolver)
    * @param providerName - Name of the provider
    * @returns True if authenticated, false otherwise
    */
   async isAuthenticated(providerName: string): Promise<boolean> {
-    // Special handling for Gemini - check if OAuth is enabled and working
+    // Lines 52-55: VALIDATE providerName
+    if (!providerName || typeof providerName !== 'string') {
+      return false;
+    }
+
+    // Special handling for Gemini - if OAuth is enabled, assume authenticated
+    // since the actual auth is handled by LOGIN_WITH_GOOGLE
     if (providerName === 'gemini' && this.isOAuthEnabled('gemini')) {
-      // For Gemini, if OAuth is enabled, we assume it's authenticated
-      // since the actual auth is handled by LOGIN_WITH_GOOGLE
       return true;
     }
 
-    const token = await this.getOAuthToken(providerName);
-    return token !== null;
+    // Lines 57-60: SET token = AWAIT this.tokenStore.getToken(providerName)
+    const token = await this.tokenStore.getToken(providerName);
+    if (!token) {
+      return false;
+    }
+
+    // Lines 62-66: Check if token is expired
+    const now = Date.now() / 1000;
+    if (token.expiry <= now) {
+      return false;
+    }
+
+    // Line 68: RETURN true
+    return true;
+  }
+
+  /**
+   * @plan PLAN-20250823-AUTHFIXES.P14
+   * @requirement REQ-002.1
+   * @pseudocode lines 4-37
+   * Logout from a specific provider by clearing stored tokens
+   * @param providerName - Name of the provider to logout from
+   */
+  async logout(providerName: string): Promise<void> {
+    // Line 5-8: VALIDATE providerName
+    if (!providerName || typeof providerName !== 'string') {
+      throw new Error('Provider name must be a non-empty string');
+    }
+
+    // Line 10-13: Get provider
+    const provider = this.providers.get(providerName);
+    if (!provider) {
+      throw new Error(`Unknown provider: ${providerName}`);
+    }
+
+    // Lines 16-26: Call provider logout if exists
+    if ('logout' in provider && typeof provider.logout === 'function') {
+      try {
+        await provider.logout();
+      } catch (error) {
+        console.warn(`Provider logout failed:`, error);
+      }
+    } else {
+      await this.tokenStore.removeToken(providerName);
+    }
+
+    // CRITICAL FIX: Clear all provider auth caches after logout
+    // This ensures BaseProvider and specific provider caches are invalidated
+    await this.clearProviderAuthCaches(providerName);
+
+    // Special handling for Gemini - clear all Google OAuth related files
+    if (providerName === 'gemini') {
+      try {
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        const os = await import('os');
+        const llxprtDir = path.join(os.homedir(), '.llxprt');
+
+        // Clear the OAuth credentials
+        const legacyCredsPath = path.join(llxprtDir, 'oauth_creds.json');
+        try {
+          await fs.unlink(legacyCredsPath);
+          console.log('Cleared Gemini OAuth credentials');
+        } catch {
+          // File might not exist
+        }
+
+        // Clear the Google accounts file
+        const googleAccountsPath = path.join(llxprtDir, 'google_accounts.json');
+        try {
+          await fs.unlink(googleAccountsPath);
+          console.log('Cleared Google account info');
+        } catch {
+          // File might not exist
+        }
+
+        // Force the OAuth client to re-authenticate by clearing any cached state
+        // The next request will need to re-authenticate
+      } catch (error) {
+        console.debug('Error clearing Gemini credentials:', error);
+      }
+    }
+  }
+
+  /**
+   * @plan PLAN-20250823-AUTHFIXES.P14
+   * @requirement REQ-002
+   * @pseudocode lines 39-49
+   * Logout from all providers by clearing all stored tokens
+   */
+  async logoutAll(): Promise<void> {
+    // Line 40: SET providers = AWAIT this.tokenStore.listProviders()
+    const providers = await this.tokenStore.listProviders();
+
+    // Lines 42-49: FOR EACH provider IN providers DO
+    for (const provider of providers) {
+      try {
+        // Line 44: AWAIT this.logout(provider)
+        await this.logout(provider);
+      } catch (error) {
+        // Lines 45-47: LOG "Failed to logout from " + provider + ": " + error
+        console.warn(`Failed to logout from ${provider}: ${error}`);
+        // Continue with other providers even if one fails
+      }
+    }
   }
 
   /**
@@ -211,13 +330,9 @@ export class OAuthManager {
     const token = await this.getOAuthToken(providerName);
 
     // Special handling for different providers
-    if (providerName === 'gemini') {
-      if (token) {
-        return token.access_token;
-      }
-      // Return a special token that signals to use LOGIN_WITH_GOOGLE
-      return 'USE_LOGIN_WITH_GOOGLE';
-    }
+    // @plan:PLAN-20250823-AUTHFIXES.P15
+    // @requirement:REQ-004
+    // Removed magic string handling for Gemini - now uses standard OAuth flow
 
     // For Qwen, return the OAuth token to be used as API key
     if (providerName === 'qwen' && token) {
@@ -235,6 +350,17 @@ export class OAuthManager {
       // Return the access token without any prefix - OAuth Bearer tokens should be used as-is
       return newToken ? newToken.access_token : null;
     } catch (error) {
+      // Special handling for Gemini - USE_EXISTING_GEMINI_OAUTH is not an error
+      // It's a signal to use the existing LOGIN_WITH_GOOGLE flow
+      if (
+        providerName === 'gemini' &&
+        error instanceof Error &&
+        error.message === 'USE_EXISTING_GEMINI_OAUTH'
+      ) {
+        // Return null to signal that OAuth should be handled by GeminiProvider
+        return null;
+      }
+
       // Re-throw the error so it's not silently swallowed
       console.error(`OAuth authentication failed for ${providerName}:`, error);
       throw error;
@@ -421,6 +547,71 @@ export class OAuthManager {
       return qwenDomains.some((domain) => urlObj.hostname.includes(domain));
     } catch {
       return false; // Invalid URL format
+    }
+  }
+
+  /**
+   * CRITICAL FIX: Clear all auth caches for a provider after logout
+   * This method finds and clears auth caches from both BaseProvider and provider-specific implementations
+   * @param providerName - Name of the provider to clear caches for
+   */
+  private async clearProviderAuthCaches(providerName: string): Promise<void> {
+    try {
+      // Import ProviderManager to access active providers
+      // Use dynamic import to avoid circular dependencies
+      const { getProviderManager } = await import(
+        '../providers/providerManagerInstance.js'
+      );
+      const providerManager = getProviderManager();
+
+      // Get the provider instance to clear its auth cache
+      const targetProvider = providerManager.getProviderByName(providerName);
+
+      if (targetProvider) {
+        // Clear BaseProvider auth cache
+        if (typeof targetProvider.clearAuthCache === 'function') {
+          targetProvider.clearAuthCache();
+        }
+
+        // Clear provider-specific cached clients
+        // For AnthropicProvider: clear _cachedAuthKey
+        if ('_cachedAuthKey' in targetProvider) {
+          const provider = targetProvider as { _cachedAuthKey?: string };
+          provider._cachedAuthKey = undefined;
+        }
+
+        // For GeminiProvider: clear any auth-related state
+        if (targetProvider.name === 'gemini') {
+          // Clear GeminiProvider auth state
+          if (
+            'clearAuthCache' in targetProvider &&
+            typeof targetProvider.clearAuthCache === 'function'
+          ) {
+            targetProvider.clearAuthCache();
+          }
+          // Clear any client instances that might be cached
+          if ('authMode' in targetProvider) {
+            const geminiProvider = targetProvider as { authMode?: string };
+            geminiProvider.authMode = 'none';
+          }
+        }
+
+        // For providers extending BaseProvider: ensure auth cache is cleared
+        if (
+          'clearState' in targetProvider &&
+          typeof targetProvider.clearState === 'function'
+        ) {
+          targetProvider.clearState();
+        }
+      }
+
+      console.debug(`Cleared auth caches for provider: ${providerName}`);
+    } catch (error) {
+      // Cache clearing failures should not prevent logout from succeeding
+      console.debug(
+        `Failed to clear provider auth caches for ${providerName}:`,
+        error,
+      );
     }
   }
 }

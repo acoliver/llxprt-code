@@ -26,11 +26,7 @@ export interface BaseProviderConfig {
   apiKey?: string;
   baseURL?: string;
 
-  // Authentication precedence config
-  commandKey?: string;
-  commandKeyfile?: string;
-  cliKey?: string;
-  cliKeyfile?: string;
+  // Environment variable names to check
   envKeyNames?: string[];
 
   // OAuth config
@@ -55,13 +51,15 @@ export abstract class BaseProvider implements IProvider {
     this.name = config.name;
     this.baseProviderConfig = config;
 
+    // If an initial apiKey is provided, store it in SettingsService
+    if (config.apiKey) {
+      const settingsService = getSettingsService();
+      settingsService.set('auth-key', config.apiKey);
+    }
+
     // Initialize auth precedence resolver
     // OAuth enablement will be checked dynamically through the manager
     const precedenceConfig: AuthPrecedenceConfig = {
-      commandKey: config.commandKey,
-      commandKeyfile: config.commandKeyfile,
-      cliKey: config.cliKey,
-      cliKeyfile: config.cliKeyfile,
       envKeyNames: config.envKeyNames || [],
       isOAuthEnabled: config.isOAuthEnabled ?? false, // Use the config value, which can be updated
       supportsOAuth: this.supportsOAuth(),
@@ -184,11 +182,29 @@ export abstract class BaseProvider implements IProvider {
   }
 
   /**
-   * Updates the API key (used for CLI --key argument)
+   * Updates the API key (used for CLI --key argument and other sources)
    */
   setApiKey?(apiKey: string): void {
-    this.baseProviderConfig.cliKey = apiKey;
-    this.authResolver.updateConfig({ cliKey: apiKey });
+    const settingsService = getSettingsService();
+
+    // CRITICAL FIX: When clearing the key, set to undefined instead of empty string
+    // This ensures the precedence chain properly skips this level
+    if (!apiKey || apiKey.trim() === '') {
+      settingsService.set('auth-key', undefined);
+    } else {
+      settingsService.set('auth-key', apiKey);
+    }
+
+    this.clearAuthCache();
+  }
+
+  /**
+   * Clears authentication (used when removing keys/keyfiles)
+   */
+  clearAuth?(): void {
+    const settingsService = getSettingsService();
+    settingsService.set('auth-key', undefined);
+    settingsService.set('auth-keyfile', undefined);
     this.clearAuthCache();
   }
 
@@ -229,7 +245,7 @@ export abstract class BaseProvider implements IProvider {
   /**
    * Clears the authentication token cache
    */
-  protected clearAuthCache(): void {
+  clearAuthCache(): void {
     this.cachedAuthToken = undefined;
     this.authCacheTimestamp = undefined;
   }
