@@ -587,8 +587,8 @@ export const useGeminiStream = (
       const history = await geminiClient.getHistory();
       const allOrphanedCalls: Array<{ id: string; name: string }> = [];
 
-      // Find the last model message and extract ALL tool calls from it
-      for (let i = history.length - 1; i >= 0; i--) {
+      // Find ALL model messages and extract ALL tool calls from them
+      for (let i = 0; i < history.length; i++) {
         if (history[i].role === 'model' && history[i].parts) {
           for (const part of history[i].parts!) {
             if (part.functionCall) {
@@ -621,7 +621,6 @@ export const useGeminiStream = (
               }
             }
           }
-          break; // Only process the last model message
         }
       }
 
