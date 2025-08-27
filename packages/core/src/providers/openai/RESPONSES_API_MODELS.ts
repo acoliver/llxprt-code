@@ -5,6 +5,7 @@ export const RESPONSES_API_MODELS = [
   'gpt-4o-realtime',
   'gpt-4-turbo',
   'gpt-4-turbo-preview',
+  'o4-mini',
   'o3-pro',
   'o3',
   'o3-mini',

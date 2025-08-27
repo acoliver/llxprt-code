@@ -24,7 +24,7 @@ export interface ResponsesRequestParams {
   conversationId?: string;
   parentId?: string;
   tool_choice?: string | object;
-  stateful?: boolean;
+  store?: boolean;
   model?: string;
   temperature?: number;
   max_tokens?: number;
@@ -77,7 +77,6 @@ export interface ResponsesRequest {
   previous_response_id?: string;
   store?: boolean;
   tool_choice?: string | object;
-  stateful?: boolean;
   temperature?: number;
   max_tokens?: number;
   top_p?: number;
@@ -106,7 +105,7 @@ export function buildResponsesRequest(
     conversationId,
     parentId,
     tool_choice,
-    stateful,
+    store,
     model,
     _convertedMessages,
     ...otherParams
@@ -289,8 +288,11 @@ export function buildResponsesRequest(
     // Always store when we have a parentId (continuing a conversation)
     request.store = true;
     request.previous_response_id = parentId;
-  } else if (stateful) {
-    // Also store in stateful mode even without parentId (starting new conversation)
+  } else if (store !== undefined) {
+    // Use the store flag if explicitly provided
+    request.store = store;
+  } else {
+    // Default to storing (stateful mode)
     request.store = true;
   }
 
@@ -300,11 +302,6 @@ export function buildResponsesRequest(
     if (tool_choice) {
       request.tool_choice = tool_choice;
     }
-  }
-
-  // Add stateful flag if provided
-  if (stateful !== undefined) {
-    request.stateful = stateful;
   }
 
   // Add stream flag if provided

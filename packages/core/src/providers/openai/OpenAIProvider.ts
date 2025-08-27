@@ -385,13 +385,71 @@ export class OpenAIProvider extends BaseProvider {
       conversationId?: string;
       parentId?: string;
       tool_choice?: string | object;
-      stateful?: boolean;
+      store?: boolean;
     },
   ): Promise<AsyncIterableIterator<Content>> {
+    // Detect orphaned messages (last contiguous block without responseId)
+    const orphanedMessages: Content[] = [];
+    let lastResponseId: string | null = null;
+    let inOrphanedBlock = true;
+    let foundAnyResponseId = false;
+
+    // Scan backwards to find the last contiguous block of messages without responseId
+    for (let i = contents.length - 1; i >= 0; i--) {
+      const content = contents[i];
+      const contentWithMetadata = content as Content & {
+        metadata?: { responseId?: string };
+      };
+      const hasResponseId = !!contentWithMetadata.metadata?.responseId;
+
+      if (hasResponseId) {
+        foundAnyResponseId = true;
+      }
+
+      if (inOrphanedBlock && !hasResponseId) {
+        // Still in the orphaned block, collect this message
+        orphanedMessages.unshift(content); // Add to beginning to maintain order
+      } else if (inOrphanedBlock && hasResponseId) {
+        // Found the boundary - this is the last message with a responseId
+        inOrphanedBlock = false;
+        lastResponseId = contentWithMetadata.metadata?.responseId || null;
+        break; // Stop here, we found our parent
+      }
+      // If we're past the orphaned block, stop scanning
+    }
+
+    // If we never found any responseId, all messages are orphaned (first conversation)
+    if (!foundAnyResponseId && orphanedMessages.length === 0) {
+      orphanedMessages.push(...contents);
+    }
+
+    // Log orphaned messages detection
+    if (orphanedMessages.length > 0) {
+      this.logger.debug(
+        () =>
+          `[Responses API] Found ${orphanedMessages.length} orphaned messages to inject, parent: ${lastResponseId || 'none'}`,
+      );
+    }
+
     // Convert Content[] to OpenAI format for internal processing
-    const messages = this.converter.toProviderFormat(
-      contents,
-    ) as OpenAIMessage[];
+    // When we detect orphaned messages, use them as the full conversation
+    let messages: OpenAIMessage[];
+    if (orphanedMessages.length > 0) {
+      // Use the orphaned messages as the conversation
+      // Note: When switching providers, orphanedMessages will contain ALL messages
+      // including any new user message since none have responseId
+      messages = this.converter.toProviderFormat(
+        orphanedMessages,
+      ) as OpenAIMessage[];
+
+      this.logger.debug(
+        () =>
+          `[Responses API] Using ${messages.length} orphaned messages as full conversation, parent: ${lastResponseId || 'none'}`,
+      );
+    } else {
+      // No orphaned messages, just convert normally
+      messages = this.converter.toProviderFormat(contents) as OpenAIMessage[];
+    }
 
     // Check if API key is available (using resolved authentication)
     const apiKey = await this.getAuthToken();
@@ -434,13 +492,19 @@ export class OpenAIProvider extends BaseProvider {
     const patchedMessages = messages;
 
     // Build the request
+    // Use the detected lastResponseId if we found orphaned messages, otherwise use provided parentId
+    const effectiveParentId =
+      orphanedMessages.length > 0
+        ? lastResponseId || undefined // Use found parent or undefined if no parent found
+        : options?.parentId; // Use provided parentId if no orphans
+
     const request = buildResponsesRequest({
       model: this.currentModel,
       messages: patchedMessages,
       tools: formattedTools,
       stream: options?.stream ?? true,
       conversationId: options?.conversationId,
-      parentId: options?.parentId,
+      parentId: effectiveParentId,
       tool_choice: options?.tool_choice,
       ...(this.modelParams || {}),
     });
@@ -616,7 +680,7 @@ export class OpenAIProvider extends BaseProvider {
       const collectedContents: Content[] = [];
       // No cache - providers should be stateless
 
-      return (async function* () {
+      return (async function* (logger) {
         for await (const content of parseResponsesStream(response.body!)) {
           // Collect contents for caching
           if (content.parts && content.parts.length > 0) {
@@ -632,13 +696,28 @@ export class OpenAIProvider extends BaseProvider {
             });
           }
 
-          // Update the parentId in the context as soon as we get a content ID
+          // Check if this is a metadata-only content with responseId
           const contentWithMetadata = content as Content & {
             metadata?: { responseId?: string };
           };
           if (contentWithMetadata.metadata?.responseId) {
-            // ConversationContext.setParentId(contentWithMetadata.metadata.responseId);
-            // TODO: Handle parent ID updates when ConversationContext is available
+            // Store the responseId in the last collected content
+            const lastCollected =
+              collectedContents[collectedContents.length - 1];
+            if (lastCollected) {
+              const lastWithMeta = lastCollected as Content & {
+                metadata?: { responseId?: string };
+                id?: string;
+              };
+              lastWithMeta.metadata = {
+                responseId: contentWithMetadata.metadata.responseId,
+              };
+              lastWithMeta.id = contentWithMetadata.metadata.responseId;
+              logger.debug(
+                () =>
+                  `Stored Response ID ${contentWithMetadata.metadata!.responseId} in collected content`,
+              );
+            }
           }
 
           yield content;
@@ -646,7 +725,7 @@ export class OpenAIProvider extends BaseProvider {
 
         // No caching - providers should be stateless
         // Token tracking should be handled at a higher level if needed
-      })();
+      })(this.logger);
     }
 
     // Handle non-streaming response
@@ -962,7 +1041,7 @@ export class OpenAIProvider extends BaseProvider {
         {
           stream: true,
           tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
-          stateful: true, // Default to stateful mode - that's the point of Responses API
+          store: true, // Default to storing conversation state - that's the point of Responses API
           conversationId,
           parentId: previousResponseId || undefined,
         },
