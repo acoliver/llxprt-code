@@ -326,11 +326,13 @@ export class GeminiCompatibleWrapper {
       }
     }
 
-    // Fix orphaned tool calls/responses for Anthropic and OpenAI providers
-    // Gemini doesn't require this as it handles cancellations gracefully
-    if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
-      contents = this.fixOrphanedToolCallsAndResponses(contents);
-    }
+    // TEMPORARILY DISABLED: The orphaned tool call detection is broken
+    // It incorrectly identifies valid tool calls as orphaned and inserts
+    // synthetic responses that shift indices and break valid pairs
+    // TODO: Fix the detection logic to properly track call/response pairs
+    // if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
+    //   contents = this.fixOrphanedToolCallsAndResponses(contents);
+    // }
 
     /**
      * @plan PLAN-20250826-RESPONSES.P05
@@ -361,159 +363,6 @@ export class GeminiCompatibleWrapper {
    *
    * This is critical for Anthropic and OpenAI providers which require strict pairing
    */
-  private fixOrphanedToolCallsAndResponses(contents: Content[]): Content[] {
-    this.logger.debug(
-      () => '[WRAPPER] Checking for orphaned tool calls/responses',
-    );
-
-    const fixed: Content[] = [];
-
-    // First pass: identify all tool calls and responses
-    const toolCalls = new Map<
-      string,
-      { name: string; messageIndex: number; isModel: boolean }
-    >();
-    const toolResponses = new Set<string>();
-
-    contents.forEach((content, idx) => {
-      content.parts?.forEach((part: Part) => {
-        if ('functionCall' in part && part.functionCall?.id) {
-          // If a function call exists but has no name, that's a critical error
-          if (!part.functionCall.name) {
-            throw new Error(
-              `Function call with id ${part.functionCall.id} is missing a name. ` +
-                `This is a critical error in the conversation history at message index ${idx}.`,
-            );
-          }
-          toolCalls.set(part.functionCall.id, {
-            name: part.functionCall.name,
-            messageIndex: idx,
-            isModel: content.role === 'model',
-          });
-        }
-        if ('functionResponse' in part) {
-          const responseId = (part.functionResponse as { id?: string }).id;
-          if (responseId) {
-            toolResponses.add(responseId);
-          }
-        }
-      });
-    });
-
-    // Identify orphaned tool calls (no matching response)
-    const orphanedToolCalls = new Set<string>();
-    for (const [id, info] of toolCalls) {
-      if (!toolResponses.has(id)) {
-        // Only consider model tool calls as orphaned (user tool calls don't need responses)
-        if (info.isModel) {
-          orphanedToolCalls.add(id);
-          this.logger.debug(
-            () =>
-              `[WRAPPER] Found orphaned tool call: id=${id}, name=${info.name}, messageIndex=${info.messageIndex}`,
-          );
-        }
-      }
-    }
-
-    // Process messages and add synthetic responses for orphaned calls
-    for (let i = 0; i < contents.length; i++) {
-      const content = contents[i];
-
-      // Check if this is a model message with orphaned tool calls
-      const orphanedInThisMessage: Array<{ id: string; name: string }> = [];
-      if (content.role === 'model') {
-        content.parts?.forEach((part: Part) => {
-          if ('functionCall' in part && part.functionCall?.id) {
-            if (orphanedToolCalls.has(part.functionCall.id)) {
-              // We already validated name exists in the first pass
-              if (!part.functionCall.name) {
-                throw new Error(
-                  `Orphaned function call with id ${part.functionCall.id} has no name. This should have been caught earlier.`,
-                );
-              }
-              orphanedInThisMessage.push({
-                id: part.functionCall.id,
-                name: part.functionCall.name,
-              });
-            }
-          }
-        });
-      }
-
-      // Add the original message
-      fixed.push(content);
-
-      // CRITICAL: Add synthetic response IMMEDIATELY after model message with orphaned calls
-      // This ensures Anthropic/OpenAI see tool_result immediately after tool_use
-      if (orphanedInThisMessage.length > 0) {
-        const syntheticParts: Part[] = orphanedInThisMessage.map((call) => ({
-          functionResponse: {
-            name: call.name,
-            response: {
-              error: '[Operation Cancelled] - Tool call was interrupted',
-            },
-            id: call.id,
-          },
-        }));
-
-        const syntheticResponse: Content = {
-          role: 'user',
-          parts: syntheticParts,
-        };
-
-        this.logger.debug(
-          () =>
-            `[WRAPPER] Inserting synthetic response for ${orphanedInThisMessage.length} orphaned tool calls immediately after model message ${i}`,
-        );
-
-        // Insert the synthetic response RIGHT AFTER the model message
-        fixed.push(syntheticResponse);
-
-        // Mark that we've handled these orphaned calls
-        orphanedInThisMessage.forEach((call) =>
-          orphanedToolCalls.delete(call.id),
-        );
-      }
-    }
-
-    // Check for orphaned responses (responses without matching calls)
-    // This is less common but can happen in edge cases
-    const responseIds = new Set<string>();
-    const callIds = new Set<string>();
-
-    fixed.forEach((content) => {
-      content.parts?.forEach((part: Part) => {
-        if ('functionCall' in part && part.functionCall?.id) {
-          callIds.add(part.functionCall.id);
-        }
-        if ('functionResponse' in part) {
-          const responseId = (part.functionResponse as { id?: string }).id;
-          if (responseId) {
-            responseIds.add(responseId);
-          }
-        }
-      });
-    });
-
-    const orphanedResponses = Array.from(responseIds).filter(
-      (id) => !callIds.has(id),
-    );
-    if (orphanedResponses.length > 0) {
-      this.logger.debug(
-        () =>
-          `[WRAPPER] Warning: Found ${orphanedResponses.length} orphaned responses without matching calls: ${orphanedResponses.join(', ')}`,
-      );
-      // For now, we don't remove orphaned responses as they might be intentional
-      // But we log them for debugging purposes
-    }
-
-    this.logger.debug(
-      () =>
-        `[WRAPPER] Fixed contents: ${contents.length} -> ${fixed.length} messages`,
-    );
-
-    return fixed;
-  }
 
   /**
    * Generate content using the wrapped provider (streaming)
@@ -646,11 +495,13 @@ export class GeminiCompatibleWrapper {
       }
     }
 
-    // Fix orphaned tool calls/responses for Anthropic and OpenAI providers
-    // Gemini doesn't require this as it handles cancellations gracefully
-    if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
-      contents = this.fixOrphanedToolCallsAndResponses(contents);
-    }
+    // TEMPORARILY DISABLED: The orphaned tool call detection is broken
+    // It incorrectly identifies valid tool calls as orphaned and inserts
+    // synthetic responses that shift indices and break valid pairs
+    // TODO: Fix the detection logic to properly track call/response pairs
+    // if (this.provider.name === 'anthropic' || this.provider.name === 'openai') {
+    //   contents = this.fixOrphanedToolCallsAndResponses(contents);
+    // }
 
     // Extract and convert tools from config if available
     let providerTools: ProviderTool[] | undefined;

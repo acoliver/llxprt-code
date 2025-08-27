@@ -215,8 +215,44 @@ export class Turn {
 
       for await (const resp of responseStream) {
         if (signal?.aborted) {
+          // Before returning on abort, check if this response has tool calls
+          // that need synthetic responses to avoid orphaned calls
+          const functionCalls = getFunctionCalls(resp) ?? [];
+          if (functionCalls.length > 0) {
+            // Add the response to history so tool calls are recorded
+            this.debugResponses.push(resp);
+
+            // Generate synthetic error responses for all tool calls
+            for (const fnCall of functionCalls) {
+              const callId =
+                fnCall.id ??
+                `${fnCall.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+              const name = fnCall.name || 'undefined_tool_name';
+
+              // Yield a synthetic error response for this cancelled tool
+              yield {
+                type: GeminiEventType.ToolCallResponse,
+                value: {
+                  callId,
+                  responseParts: {
+                    functionResponse: {
+                      id: callId,
+                      name,
+                      response: {
+                        error:
+                          '[Operation Cancelled] Tool call interrupted by user',
+                      },
+                    },
+                  },
+                  resultDisplay: 'Cancelled by user',
+                  error: new Error('Tool call cancelled by user'),
+                  errorType: ToolErrorType.EXECUTION_FAILED,
+                },
+              };
+            }
+          }
+
           yield { type: GeminiEventType.UserCancelled };
-          // Do not add resp to debugResponses if aborted before processing
           return;
         }
         this.debugResponses.push(resp);

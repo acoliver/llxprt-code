@@ -61,6 +61,7 @@ import { useKeypress } from './useKeypress.js';
 
 // Create debug logger for cancellation flow
 const cancelLogger = new DebugLogger('llxprt:cancel');
+const streamLogger = new DebugLogger('llxprt:stream');
 
 export function mergePartListUnions(list: PartListUnion[]): PartListUnion {
   const resultParts: Part[] = [];
@@ -237,12 +238,8 @@ export const useGeminiStream = (
     turnCancelledRef.current = true;
     abortControllerRef.current?.abort();
 
-    // Reset the flag shortly after aborting to prevent blocking the next request
-    // The handleUserCancelledEvent will also reset it, but this handles the case
-    // where the user types "continue" before the server event arrives
-    setTimeout(() => {
-      turnCancelledRef.current = false;
-    }, 100);
+    // Don't reset the flag here - let handleUserCancelledEvent do it
+    // This prevents duplicate cancellation processing
 
     // Don't add incomplete/partial assistant messages to history
     // These can corrupt the context and cause 400 errors
@@ -280,13 +277,8 @@ export const useGeminiStream = (
       }
     }
 
-    addItem(
-      {
-        type: MessageType.INFO,
-        text: 'Request cancelled.',
-      },
-      Date.now(),
-    );
+    // Don't show message here - handleUserCancelledEvent will show the message
+    // This prevents duplicate "cancelled" messages
     setPendingHistoryItem(null);
     onCancelSubmit();
     setIsResponding(false);
@@ -538,8 +530,8 @@ export const useGeminiStream = (
         cancelLogger.debug(
           () => '[CANCEL] Turn already cancelled, skipping duplicate event',
         );
-        console.warn(
-          '[CANCEL] Duplicate UserCancelled event received, ignoring',
+        cancelLogger.debug(
+          () => '[CANCEL] Duplicate UserCancelled event received, ignoring',
         );
         return;
       }
@@ -585,116 +577,14 @@ export const useGeminiStream = (
       }
 
       // Log cancelled tool IDs for debugging
-      if (cancelledToolIds.length > 0 && process.env.DEBUG) {
-        console.log('[ESC] Cancelled tool IDs:', cancelledToolIds);
-      }
-
-      // CRITICAL FIX: Add synthetic functionResponse parts for ALL orphaned tool calls
-      // This ensures Anthropic/OpenAI see matching tool_result blocks for tool_use blocks
-
-      // Get the current history to find ALL tool calls that need responses
-      const history = await geminiClient.getHistory();
-      const allOrphanedCalls: Array<{ id: string; name: string }> = [];
-
-      if (process.env.DEBUG) {
-        console.log(
-          `[CANCEL] Scanning history with ${history.length} entries for orphaned tool calls`,
+      if (cancelledToolIds.length > 0) {
+        cancelLogger.debug(
+          () => `[ESC] Cancelled tool IDs: ${JSON.stringify(cancelledToolIds)}`,
         );
       }
 
-      // Find ALL model messages and extract ALL tool calls from them
-      for (let i = 0; i < history.length; i++) {
-        if (history[i].role === 'model' && history[i].parts) {
-          for (const part of history[i].parts!) {
-            if (part.functionCall) {
-              const callId =
-                part.functionCall.id ||
-                `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-              const callName = part.functionCall.name || 'unknown';
-
-              // Check if this call already has a response in subsequent history
-              let hasResponse = false;
-              for (let j = i + 1; j < history.length; j++) {
-                if (history[j].parts) {
-                  for (const respPart of history[j].parts!) {
-                    if (
-                      respPart.functionResponse &&
-                      (respPart.functionResponse as { id?: string }).id ===
-                        callId
-                    ) {
-                      hasResponse = true;
-                      break;
-                    }
-                  }
-                }
-                if (hasResponse) break;
-              }
-
-              // If no response found, add to orphaned list
-              if (!hasResponse) {
-                allOrphanedCalls.push({ id: callId, name: callName });
-              }
-            }
-          }
-        }
-      }
-
-      // Add synthetic responses for ALL orphaned calls (including ones we just cancelled)
-      if (allOrphanedCalls.length > 0) {
-        if (process.env.DEBUG) {
-          console.log(
-            `[CANCEL] Found ${allOrphanedCalls.length} orphaned tool calls:`,
-            allOrphanedCalls,
-          );
-        }
-
-        const syntheticResponses = allOrphanedCalls.map((call) => ({
-          functionResponse: {
-            id: call.id,
-            name: call.name,
-            response: {
-              error:
-                '[Operation Cancelled] Tool execution was cancelled by user',
-            },
-          },
-        }));
-
-        cancelLogger.debug(
-          () =>
-            `[CANCEL] Generated ${syntheticResponses.length} synthetic responses for orphaned calls`,
-        );
-        cancelLogger.debug(
-          () => `[CANCEL] Orphaned calls: ${JSON.stringify(allOrphanedCalls)}`,
-        );
-
-        // Add the synthetic responses to the conversation history
-        cancelLogger.debug(
-          () =>
-            '[CANCEL] Adding synthetic responses to history via geminiClient.addHistory()',
-        );
-        geminiClient.addHistory({
-          role: 'user',
-          parts: syntheticResponses,
-        });
-
-        cancelLogger.debug(
-          () =>
-            '[CANCEL] Successfully added synthetic responses for all orphaned tool calls',
-        );
-
-        if (process.env.DEBUG) {
-          console.log(
-            `[CANCEL] Added ${syntheticResponses.length} synthetic responses to history`,
-          );
-          // Verify they were added
-          const updatedHistory = await geminiClient.getHistory();
-          console.log(
-            `[CANCEL] History now has ${updatedHistory.length} entries`,
-          );
-        }
-      } else if (process.env.DEBUG) {
-        console.log('[CANCEL] No orphaned tool calls found');
-      }
+      // Removed: Orphaned tool call handling moved to ToolExecutor
+      // The CLI layer should not be responsible for managing tool call/response pairing
 
       addItem(
         {
@@ -706,17 +596,13 @@ export const useGeminiStream = (
       setIsResponding(false);
       setThought(null); // Reset thought when user cancels
 
-      // CRITICAL: Reset the cancellation flag after handling the cancellation
-      // This prevents the next "continue" from being blocked
-      turnCancelledRef.current = false;
+      // Reset the cancellation flag after a delay to prevent duplicate processing
+      // but allow future cancellations to work
+      setTimeout(() => {
+        turnCancelledRef.current = false;
+      }, 500); // Longer delay to ensure server event is processed
     },
-    [
-      addItem,
-      pendingHistoryItemRef,
-      setPendingHistoryItem,
-      setThought,
-      geminiClient,
-    ],
+    [addItem, pendingHistoryItemRef, setPendingHistoryItem, setThought],
   );
 
   const handleErrorEvent = useCallback(
@@ -1452,7 +1338,9 @@ export const useGeminiStream = (
             responsesToSend.length,
           );
           responsesToSend.forEach((resp, idx) => {
-            console.log(`[DEBUG] responsesToSend[${idx}] type:`, typeof resp);
+            streamLogger.debug(
+              () => `responsesToSend[${idx}] type: ${typeof resp}`,
+            );
             console.log(
               `[DEBUG] responsesToSend[${idx}] isArray:`,
               Array.isArray(resp),
