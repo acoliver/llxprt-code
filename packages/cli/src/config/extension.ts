@@ -9,6 +9,7 @@ import {
   GeminiCLIExtension,
   Storage,
   getErrorMessage,
+  LLXPRT_DIR,
 } from '@vybestack/llxprt-code-core';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -16,8 +17,9 @@ import * as os from 'os';
 import { simpleGit } from 'simple-git';
 import { recursivelyHydrateStrings } from './extensions/variables.js';
 import { SettingScope, loadSettings } from './settings.js';
+import { isWorkspaceTrusted } from './trustedFolders.js';
 
-export const EXTENSIONS_DIRECTORY_NAME = '.llxprt/extensions';
+export const EXTENSIONS_DIRECTORY_NAME = path.join(LLXPRT_DIR, 'extensions');
 
 export const EXTENSIONS_CONFIG_FILENAME = 'llxprt-extension.json';
 export const INSTALL_METADATA_FILENAME = '.llxprt-extension-install.json';
@@ -116,7 +118,10 @@ export function loadExtensions(workspaceDir: string): Extension[] {
   const disabledExtensions = settings.extensions?.disabled ?? [];
   const allExtensions = [...loadUserExtensions()];
 
-  if (!settings.extensionManagement) {
+  if (
+    (isWorkspaceTrusted(settings) ?? true) &&
+    !settings.extensionManagement
+  ) {
     allExtensions.push(...getWorkspaceExtensions(workspaceDir));
   }
 
@@ -313,6 +318,14 @@ async function cloneFromGit(
 export async function installExtension(
   installMetadata: ExtensionInstallMetadata,
 ): Promise<string> {
+  const cwd = process.cwd();
+  const settings = loadSettings(cwd).merged;
+  if (!isWorkspaceTrusted(settings)) {
+    throw new Error(
+      `Could not install extension from untrusted folder at ${installMetadata.source}`,
+    );
+  }
+
   const extensionsDir = ExtensionStorage.getUserExtensionsDir();
   await fs.promises.mkdir(extensionsDir, { recursive: true });
 
