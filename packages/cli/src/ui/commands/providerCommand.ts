@@ -130,16 +130,6 @@ export const providerCommand: SlashCommand = {
           newProvider.setModelParams({});
         }
 
-        // Reset conversation context when switching providers to avoid orphaned tool calls
-        // This prevents issues where tool calls from one provider cause errors with another
-        providerManager.resetConversationContext();
-
-        // Clear the conversation history UI to start fresh with the new provider
-        // This prevents orphaned tool responses from appearing in the UI
-        if (context.ui?.clear) {
-          context.ui.clear();
-        }
-
         // Ensure provider manager is set on config
         context.services.config.setProviderManager(providerManager);
 
