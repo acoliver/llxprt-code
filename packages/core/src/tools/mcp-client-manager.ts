@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MCPServerConfig } from '../config/config.js';
-import { ToolRegistry } from './tool-registry.js';
-import { PromptRegistry } from '../prompts/prompt-registry.js';
+import type { Config, MCPServerConfig } from '../config/config.js';
+import type { ToolRegistry } from './tool-registry.js';
+import type { PromptRegistry } from '../prompts/prompt-registry.js';
 import {
   McpClient,
   MCPDiscoveryState,
@@ -51,7 +51,10 @@ export class McpClientManager {
    * It connects to each server, discovers its available tools, and registers
    * them with the `ToolRegistry`.
    */
-  async discoverAllMcpTools(): Promise<void> {
+  async discoverAllMcpTools(cliConfig: Config): Promise<void> {
+    if (cliConfig.isTrustedFolder() === false) {
+      return;
+    }
     await this.stop();
     this.discoveryState = MCPDiscoveryState.IN_PROGRESS;
     const servers = populateMcpServerCommand(
@@ -72,7 +75,7 @@ export class McpClientManager {
         this.clients.set(name, client);
         try {
           await client.connect();
-          await client.discover();
+          await client.discover(cliConfig);
         } catch (error) {
           // Log the error but don't let a single failed server stop the others
           console.error(

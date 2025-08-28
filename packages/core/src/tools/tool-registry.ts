@@ -268,7 +268,7 @@ export class ToolRegistry {
     }
 
     // Discover MCP tools into newTools
-    await this.mcpClientManager.discoverAllMcpTools();
+    await this.mcpClientManager.discoverAllMcpTools(this.config);
 
     // Only NOW do we atomically swap the reference
     // This ensures getFunctionDeclarations() never sees a partial tool map
@@ -309,7 +309,7 @@ export class ToolRegistry {
     // Discover MCP tools into newTools
     const oldRegisterTool = this.registerTool.bind(this);
     this.registerTool = tempRegistry.registerTool;
-    await this.mcpClientManager.discoverAllMcpTools();
+    await this.mcpClientManager.discoverAllMcpTools(this.config);
     this.registerTool = oldRegisterTool;
 
     // Only NOW do we atomically swap the reference
@@ -359,6 +359,7 @@ export class ToolRegistry {
         this.config.getPromptRegistry(),
         this.config.getDebugMode(),
         this.config.getWorkspaceContext(),
+        this.config,
       );
     }
 
