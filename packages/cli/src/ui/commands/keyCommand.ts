@@ -51,6 +51,11 @@ export const keyCommand: SlashCommand = {
         activeProvider.setApiKey('');
       }
 
+      // Also save clearing action to ephemeral settings so it's properly saved in profiles
+      config.setEphemeralSetting('auth-key', undefined);
+      // Clear any keyfile when explicitly clearing a key
+      config.setEphemeralSetting('auth-keyfile', undefined);
+
       // If this is the Gemini provider, we might need to switch auth mode
       const requiresAuthRefresh = providerName === 'gemini';
       if (requiresAuthRefresh) {

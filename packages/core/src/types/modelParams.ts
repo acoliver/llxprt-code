@@ -62,6 +62,12 @@ export interface EphemeralSettings {
   'shell-replacement'?: boolean;
   /** Enable todo continuation after stream completion (default: true) */
   'todo-continuation'?: boolean;
+  /** Enable or disable streaming responses (enabled/disabled, default: enabled) */
+  streaming?: 'enabled' | 'disabled';
+  /** Stream options for OpenAI API */
+  'stream-options'?: Record<string, unknown>;
+  /** Emoji filter mode (allowed, auto, warn, error) */
+  emojifilter?: 'allowed' | 'auto' | 'warn' | 'error';
 }
 
 /**

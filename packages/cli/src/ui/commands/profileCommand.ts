@@ -113,20 +113,28 @@ const saveCommand: SlashCommand = {
       // Get ephemeral settings from config
       const allEphemeralSettings =
         context.services.config.getEphemeralSettings();
+
+      // Use all possible ephemeral settings keys based on the type definition
       const ephemeralKeys: Array<keyof EphemeralSettings> = [
         'context-limit',
         'compression-threshold',
+        'auth-key',
+        'auth-keyfile',
         'base-url',
         'tool-format',
         'api-version',
         'custom-headers',
-        'disabled-tools',
         'tool-output-max-items',
         'tool-output-max-tokens',
         'tool-output-truncate-mode',
         'tool-output-item-size-limit',
         'max-prompt-tokens',
+        'disabled-tools',
         'shell-replacement',
+        'todo-continuation',
+        'streaming',
+        'stream-options',
+        'emojifilter',
       ];
 
       const ephemeralSettings: Partial<EphemeralSettings> = {};
@@ -137,32 +145,8 @@ const saveCommand: SlashCommand = {
         }
       }
 
-      // Get auth-keyfile from ephemeral settings (set by /keyfile command)
-      const ephemeralKeyfile = allEphemeralSettings['auth-keyfile'];
-      if (ephemeralKeyfile) {
-        (ephemeralSettings as Record<string, unknown>)['auth-keyfile'] =
-          ephemeralKeyfile;
-        // Don't save auth-key if using keyfile
-      } else {
-        // Get auth-key from ephemeral settings (set by /key command)
-        const ephemeralApiKey = allEphemeralSettings['auth-key'];
-        if (ephemeralApiKey) {
-          (ephemeralSettings as Record<string, unknown>)['auth-key'] =
-            ephemeralApiKey;
-        }
-      }
-
-      // Fallback: Check persistent settings for base-url if not in ephemeral
-      // This handles the case where base-url was set with the old command
-      if (!ephemeralSettings['base-url']) {
-        const allSettings = context.services.settings.merged || {};
-        const providerBaseUrls =
-          (allSettings.providerBaseUrls as Record<string, string>) || {};
-        if (providerName && providerBaseUrls[providerName]) {
-          (ephemeralSettings as Record<string, unknown>)['base-url'] =
-            providerBaseUrls[providerName];
-        }
-      }
+      // Note: We no longer need special handling for auth-keyfile vs auth-key
+      // All ephemeral settings are captured directly from the config above
 
       // Create profile object
       const profile: Profile = {
@@ -286,17 +270,28 @@ const loadCommand: SlashCommand = {
         activeProviderForModel.setModel(profile.model);
       }
 
-      // 3. Clear existing ephemeral settings first
-      const ephemeralKeys = [
-        'auth-key',
-        'auth-keyfile',
+      // 3. Clear all existing ephemeral settings first
+      // Use the same list of ephemeral keys as in the save command for consistency
+      const ephemeralKeys: Array<keyof EphemeralSettings> = [
         'context-limit',
         'compression-threshold',
+        'auth-key',
+        'auth-keyfile',
         'base-url',
         'tool-format',
         'api-version',
         'custom-headers',
+        'tool-output-max-items',
+        'tool-output-max-tokens',
+        'tool-output-truncate-mode',
+        'tool-output-item-size-limit',
+        'max-prompt-tokens',
         'disabled-tools',
+        'shell-replacement',
+        'todo-continuation',
+        'streaming',
+        'stream-options',
+        'emojifilter',
       ];
 
       // Clear all known ephemeral settings
@@ -321,33 +316,64 @@ const loadCommand: SlashCommand = {
         activeProvider.setModelParams(undefined);
       }
 
-      // 4. Apply ephemeral settings from profile
+      // 4. Apply all ephemeral settings from profile
       for (const [key, value] of Object.entries(profile.ephemeralSettings)) {
         // Store in ephemeral settings
         context.services.config.setEphemeralSetting(key, value);
 
-        // Special handling for auth-key, auth-keyfile, and base-url
-        if (key === 'auth-key' && typeof value === 'string') {
-          // Directly set API key on the provider without saving to persistent settings
-          const activeProvider = providerManager?.getActiveProvider();
-          if (activeProvider && activeProvider.setApiKey) {
-            activeProvider.setApiKey(value);
-          }
-        } else if (key === 'auth-keyfile' && typeof value === 'string') {
-          // Just store the keyfile path in ephemeral settings
-          // The AuthPrecedenceResolver will read from the file when needed
-          // DO NOT read the file and call setApiKey here - that defeats the purpose
-        } else if (key === 'base-url' && typeof value === 'string') {
-          // Directly set base URL on the provider without saving to persistent settings
-          const activeProvider = providerManager?.getActiveProvider();
-          if (activeProvider && activeProvider.setBaseUrl) {
-            // Handle "none" as clearing the base URL
-            if (value === 'none') {
-              activeProvider.setBaseUrl(undefined);
-            } else {
-              activeProvider.setBaseUrl(value);
+        // Apply special handling for certain settings
+        switch (key) {
+          case 'auth-key':
+            if (typeof value === 'string') {
+              // Directly set API key on the provider without saving to persistent settings
+              const activeProvider = providerManager?.getActiveProvider();
+              if (activeProvider && activeProvider.setApiKey) {
+                activeProvider.setApiKey(value);
+              }
             }
-          }
+            break;
+          default:
+            // Other ephemeral settings are already stored above
+            break;
+
+          case 'auth-keyfile':
+            // Keyfile path is already stored in ephemeral settings above
+            // The AuthPrecedenceResolver will read from the file when needed
+            break;
+
+          case 'base-url':
+            if (typeof value === 'string') {
+              // Directly set base URL on the provider without saving to persistent settings
+              const activeProvider = providerManager?.getActiveProvider();
+              if (activeProvider && activeProvider.setBaseUrl) {
+                // Handle "none" as clearing the base URL
+                if (value === 'none') {
+                  activeProvider.setBaseUrl(undefined);
+                } else {
+                  activeProvider.setBaseUrl(value);
+                }
+              }
+            }
+            break;
+
+          case 'context-limit':
+          case 'compression-threshold':
+            // Apply compression settings to GeminiClient when either setting is present
+            if (geminiClient) {
+              const contextLimit = profile.ephemeralSettings[
+                'context-limit'
+              ] as number | undefined;
+              const compressionThreshold = profile.ephemeralSettings[
+                'compression-threshold'
+              ] as number | undefined;
+              geminiClient.setCompressionSettings(
+                compressionThreshold,
+                contextLimit,
+              );
+            }
+            break;
+
+          // No special handling needed for other settings, they're already stored in ephemeral settings
         }
       }
 

@@ -9,6 +9,8 @@ import { DebugLogger } from '../debug/index.js';
 // DISCLAIMER: This is a copied version of https://github.com/googleapis/js-genai/blob/main/src/chats.ts with the intention of working around a key bug
 // where function responses are not treated as "valid" responses: https://b.corp.google.com/issues/420354090
 
+const geminiChatLogger = new DebugLogger('llxprt:core:geminiChat');
+
 import {
   GenerateContentResponse,
   Content,
@@ -163,16 +165,30 @@ function isValidResponse(response: GenerateContentResponse): boolean {
 
 function isValidContent(content: Content): boolean {
   if (content.parts === undefined || content.parts.length === 0) {
+    geminiChatLogger.debug(
+      () => `isValidContent: false - no parts for ${content.role} message`,
+    );
     return false;
   }
   for (const part of content.parts) {
     if (part === undefined || Object.keys(part).length === 0) {
+      geminiChatLogger.debug(
+        () => `isValidContent: false - empty part in ${content.role} message`,
+      );
       return false;
     }
     if (!part.thought && part.text !== undefined && part.text === '') {
+      geminiChatLogger.debug(
+        () =>
+          `isValidContent: false - empty text part in ${content.role} message`,
+      );
       return false;
     }
   }
+  geminiChatLogger.debug(
+    () =>
+      `isValidContent: true for ${content.role} message with ${content.parts?.length ?? 0} parts`,
+  );
   return true;
 }
 
@@ -202,16 +218,24 @@ function extractCuratedHistory(comprehensiveHistory: Content[]): Content[] {
   if (comprehensiveHistory === undefined || comprehensiveHistory.length === 0) {
     return [];
   }
+  geminiChatLogger.debug(
+    () =>
+      `extractCuratedHistory: processing ${comprehensiveHistory.length} entries`,
+  );
   const curatedHistory: Content[] = [];
   const length = comprehensiveHistory.length;
   let i = 0;
   while (i < length) {
     if (comprehensiveHistory[i].role === 'user') {
       curatedHistory.push(comprehensiveHistory[i]);
+      geminiChatLogger.debug(
+        () => `extractCuratedHistory: added user entry at index ${i}`,
+      );
       i++;
     } else {
       const modelOutput: Content[] = [];
       let isValid = true;
+      const startIdx = i;
       while (i < length && comprehensiveHistory[i].role === 'model') {
         modelOutput.push(comprehensiveHistory[i]);
         if (isValid && !isValidContent(comprehensiveHistory[i])) {
@@ -221,6 +245,15 @@ function extractCuratedHistory(comprehensiveHistory: Content[]): Content[] {
       }
       if (isValid) {
         curatedHistory.push(...modelOutput);
+        geminiChatLogger.debug(
+          () =>
+            `extractCuratedHistory: added ${modelOutput.length} valid model entries from index ${startIdx}`,
+        );
+      } else {
+        geminiChatLogger.debug(
+          () =>
+            `extractCuratedHistory: skipped ${modelOutput.length} invalid model entries from index ${startIdx}`,
+        );
       }
     }
   }
@@ -792,9 +825,16 @@ export class GeminiChat {
    *     chat session.
    */
   getHistory(curated: boolean = false): Content[] {
+    geminiChatLogger.debug(
+      () =>
+        `getHistory: called with curated=${curated}, history length=${this.history.length}`,
+    );
     const history = curated
       ? extractCuratedHistory(this.history)
       : this.history;
+    geminiChatLogger.debug(
+      () => `getHistory: returning ${history.length} entries`,
+    );
     // Deep copy the history to avoid mutating the history outside of the
     // chat session.
     return structuredClone(history);
@@ -841,6 +881,9 @@ export class GeminiChat {
     let hasReceivedAnyChunk = false;
     let invalidChunkCount = 0;
     let totalChunkCount = 0;
+    // Track text parts separately to consolidate them
+    let accumulatedText = '';
+    const functionCalls: Part[] = [];
 
     for await (const chunk of streamResponse) {
       hasReceivedAnyChunk = true;
@@ -864,7 +907,22 @@ export class GeminiChat {
 
           // Filter out thought parts from being added to history.
           if (!this.isThoughtContent(content) && content.parts) {
-            modelResponseParts.push(...content.parts);
+            // Process parts and consolidate text
+            for (const part of content.parts) {
+              if (part.text) {
+                // Accumulate text parts to avoid having hundreds of tiny parts
+                accumulatedText += part.text;
+              } else if ('functionCall' in part) {
+                // Save function calls separately to preserve them
+                functionCalls.push(part);
+              } else if ('functionResponse' in part) {
+                // This shouldn't happen in a model response, but preserve it
+                modelResponseParts.push(part);
+              } else {
+                // Other types of parts (e.g., inlineData)
+                modelResponseParts.push(part);
+              }
+            }
           }
         }
       } else {
@@ -879,6 +937,14 @@ export class GeminiChat {
     // 2. We received chunks but NONE had valid content (all were invalid or empty)
     // This allows models like Qwen to send empty chunks at the end of a stream
     // as long as they sent valid content earlier.
+
+    // Assemble the final parts: consolidated text first, then function calls
+    if (accumulatedText) {
+      modelResponseParts.unshift({ text: accumulatedText });
+    }
+    // Add function calls after text
+    modelResponseParts.push(...functionCalls);
+
     if (
       !hasReceivedAnyChunk ||
       (!hasReceivedValidContent && totalChunkCount > 0)
@@ -907,6 +973,9 @@ export class GeminiChat {
     modelOutput: Content[],
     automaticFunctionCallingHistory?: Content[],
   ) {
+    geminiChatLogger.debug(
+      () => `recordHistory: start with history length ${this.history.length}`,
+    );
     const newHistoryEntries: Content[] = [];
 
     // Part 1: Handle the user's part of the turn.
@@ -918,12 +987,22 @@ export class GeminiChat {
         ...extractCuratedHistory(automaticFunctionCallingHistory),
       );
     } else {
-      // Guard for streaming calls where the user input might already be in the history.
-      if (
-        this.history.length === 0 ||
-        this.history[this.history.length - 1] !== userInput
-      ) {
+      // Check if the user input is already in history (for streaming or tool responses)
+      const isUserInputInHistory =
+        this.history.length > 0 &&
+        (this.history[this.history.length - 1] === userInput ||
+          (this.history[this.history.length - 1].role === 'user' &&
+            isFunctionResponse(this.history[this.history.length - 1])));
+
+      if (!isUserInputInHistory) {
         newHistoryEntries.push(userInput);
+        geminiChatLogger.debug(
+          () => `recordHistory: adding user input to new entries`,
+        );
+      } else {
+        geminiChatLogger.debug(
+          () => `recordHistory: user input already in history`,
+        );
       }
     }
 
@@ -962,7 +1041,64 @@ export class GeminiChat {
     }
 
     // Part 4: Add the new turn (user and model parts) to the main history.
+    // Special case: If we're adding a model response after a tool execution,
+    // we should preserve the tool calls from the previous model message
+    if (
+      consolidatedOutputContents.length > 0 &&
+      consolidatedOutputContents[0].role === 'model' &&
+      this.history.length >= 2
+    ) {
+      const lastEntry = this.history[this.history.length - 1];
+      const secondLastEntry = this.history[this.history.length - 2];
+
+      geminiChatLogger.debug(
+        () =>
+          `recordHistory: checking for tool call preservation. Last entry: ${lastEntry.role}, Second last: ${secondLastEntry.role}`,
+      );
+
+      // Check if this is a model response after tool execution
+      if (
+        lastEntry.role === 'user' &&
+        isFunctionResponse(lastEntry) &&
+        secondLastEntry.role === 'model' &&
+        secondLastEntry.parts?.some((p) => 'functionCall' in p)
+      ) {
+        // This is a follow-up model response after tool execution
+        // Append the new content to the existing model message to preserve tool calls
+        const existingModelMessage = secondLastEntry;
+        const newModelContent = consolidatedOutputContents[0];
+
+        geminiChatLogger.debug(
+          () =>
+            `recordHistory: preserving tool calls - merging new model content into existing model message`,
+        );
+
+        // Merge the new content into the existing model message
+        if (!existingModelMessage.parts) {
+          existingModelMessage.parts = [];
+        }
+
+        // Add the new parts (usually text response about the tool result)
+        if (newModelContent.parts) {
+          existingModelMessage.parts.push(...newModelContent.parts);
+        }
+
+        geminiChatLogger.debug(
+          () =>
+            `recordHistory: merged content, history length remains ${this.history.length}`,
+        );
+        // Don't add newHistoryEntries as they would duplicate the user's tool response
+        // Don't add consolidatedOutputContents as we merged it into the existing message
+        return;
+      }
+    }
+
+    // Normal case: add entries as usual
     this.history.push(...newHistoryEntries, ...consolidatedOutputContents);
+    geminiChatLogger.debug(
+      () =>
+        `recordHistory: added ${newHistoryEntries.length + consolidatedOutputContents.length} entries, new history length: ${this.history.length}`,
+    );
   }
 
   private hasTextContent(

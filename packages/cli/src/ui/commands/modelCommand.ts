@@ -44,6 +44,11 @@ export const modelCommand: SlashCommand = {
         const settingsService = config?.getSettingsService();
         const useSettingsService = settingsService !== null;
 
+        // Clear existing model parameters first
+        if (activeProvider.setModelParams) {
+          activeProvider.setModelParams({});
+        }
+
         activeProvider.setModel(modelName);
 
         if (useSettingsService && settingsService && config) {

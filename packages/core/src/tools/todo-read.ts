@@ -59,8 +59,11 @@ export class TodoRead extends BaseTool<TodoReadParams, ToolResult> {
         'Use TodoWrite to create a task list when working on multi-step projects.';
 
       return {
-        llmContent: emptyOutput + (reminder || ''),
+        llmContent: emptyOutput,
         returnDisplay: emptyOutput,
+        metadata: {
+          reminder: reminder || undefined,
+        },
       };
     }
 

@@ -130,6 +130,11 @@ export const providerCommand: SlashCommand = {
           newProvider.setModelParams({});
         }
 
+        // Explicitly clear the model to ensure we're not carrying over models from previous providers
+        if (newProvider.setModel) {
+          newProvider.setModel('');
+        }
+
         // Ensure provider manager is set on config
         context.services.config.setProviderManager(providerManager);
 

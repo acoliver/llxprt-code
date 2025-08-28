@@ -184,7 +184,7 @@ export class TodoWrite extends BaseTool<TodoWriteParams, ToolResult> {
     const nextAction = this.determineNextAction(params.todos);
 
     return {
-      llmContent: output + (reminder || ''),
+      llmContent: output,
       returnDisplay: isInteractive ? '' : output, // Empty to suppress display in interactive mode
       metadata: {
         stateChanged: this.reminderService.shouldGenerateReminder(stateChange),
@@ -193,6 +193,7 @@ export class TodoWrite extends BaseTool<TodoWriteParams, ToolResult> {
         statusChanged: stateChange.statusChanged.length,
         statistics,
         nextAction,
+        reminder: reminder || undefined,
       },
     };
   }

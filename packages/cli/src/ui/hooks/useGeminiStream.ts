@@ -1196,60 +1196,14 @@ export const useGeminiStream = (
         );
 
         if (allToolsCancelled) {
-          if (geminiClient) {
-            // First, add synthetic tool calls to the last model message
-            // This ensures OpenAI/Anthropic see matching call/response pairs
-            const history = await geminiClient.getHistory();
-            if (history.length > 0) {
-              // Find the last model message (going backwards)
-              for (let i = history.length - 1; i >= 0; i--) {
-                if (history[i].role === 'model') {
-                  // Create synthetic functionCall parts for cancelled tools
-                  const syntheticCalls = toolsToProcess.map((tc) => ({
-                    functionCall: {
-                      id: tc.request.callId,
-                      name: tc.request.name,
-                      args: tc.request.args || {},
-                    },
-                  }));
+          // When all tools are cancelled, we don't continue the conversation
+          // We should NOT modify history - just mark tools as submitted and continue
+          // The conversation history should remain intact for provider switching
 
-                  // Add synthetic calls to the model message
-                  if (!history[i].parts) {
-                    history[i].parts = [];
-                  }
-                  history[i].parts!.push(...syntheticCalls);
-
-                  console.log(
-                    `[CANCELLATION] Added ${syntheticCalls.length} synthetic tool calls to model message for cancelled tools`,
-                  );
-
-                  // Update the history with the modified message
-                  geminiClient.setHistory(history);
-                  break;
-                }
-              }
-            }
-
-            // Now add the function responses to the history
-            // so the model knows the tools were cancelled.
-            const responsesToAdd = toolsToProcess.flatMap(
-              (toolCall) => toolCall.response.responseParts,
-            );
-            const combinedParts: Part[] = [];
-            for (const response of responsesToAdd) {
-              if (Array.isArray(response)) {
-                combinedParts.push(...response);
-              } else if (typeof response === 'string') {
-                combinedParts.push({ text: response });
-              } else {
-                combinedParts.push(response);
-              }
-            }
-            geminiClient.addHistory({
-              role: 'user',
-              parts: combinedParts,
-            });
-          }
+          streamLogger.debug(
+            () =>
+              `[CANCELLATION] All ${toolsToProcess.length} tools cancelled - not modifying history`,
+          );
 
           const callIdsToMarkAsSubmitted = toolsToProcess.map(
             (toolCall) => toolCall.request.callId,

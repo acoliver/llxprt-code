@@ -99,6 +99,16 @@ export const keyfileCommand: SlashCommand = {
           context.services.settings.removeProviderKeyfile(providerName);
         }
 
+        // Also save clearing action to ephemeral settings so it's properly saved in profiles
+        if (context.services.config) {
+          context.services.config.setEphemeralSetting(
+            'auth-keyfile',
+            undefined,
+          );
+          // Clear any auth-key when explicitly clearing a keyfile
+          context.services.config.setEphemeralSetting('auth-key', undefined);
+        }
+
         return {
           type: 'message',
           messageType: 'info',
