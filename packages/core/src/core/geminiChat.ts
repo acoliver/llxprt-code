@@ -428,7 +428,8 @@ export class GeminiChat {
     const userContent = createUserContentWithFunctionResponseFix(
       params.message,
     );
-    const requestContents = this.getHistory(true).concat(userContent);
+    // Don't use curated history - it filters out model messages with only tool calls
+    const requestContents = this.getHistory(false).concat(userContent);
 
     // Fix orphaned tool calls (non-streaming version) - same logic as streaming
     const toolCalls = new Map<string, { name: string; messageIndex: number }>();
@@ -692,7 +693,8 @@ export class GeminiChat {
 
     // Add user content to history ONCE before any attempts.
     this.history.push(userContent);
-    const requestContents = this.getHistory(true);
+    // Don't use curated history - it filters out model messages with only tool calls
+    const requestContents = this.getHistory(false);
 
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
