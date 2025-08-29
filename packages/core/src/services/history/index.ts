@@ -5,3 +5,5 @@ export { Message, MessageRole, MessageMetadata, HistoryState } from './types.js'
 export { MessageValidator, ValidationError } from './MessageValidator.js';
 export { StateManager } from './StateManager.js';
 export { ToolCallManager } from './ToolCallManager.js';
+export { ErrorHandler } from './ErrorHandler.js';
+export { EventManager } from './EventManager.js';
