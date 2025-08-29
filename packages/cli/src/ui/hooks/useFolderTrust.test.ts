@@ -33,7 +33,6 @@ describe('useFolderTrust', () => {
   beforeEach(() => {
     mockSettings = {
       merged: {
-        folderTrustFeature: true,
         folderTrust: undefined,
       },
       setValue: vi.fn(),

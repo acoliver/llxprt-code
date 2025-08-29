@@ -420,6 +420,7 @@ export async function loadHierarchicalLlxprtMemory(
   fileService: FileDiscoveryService,
   settings: Settings,
   extensionContextFilePaths: string[] = [],
+  folderTrust: boolean,
   memoryImportFormat: 'flat' | 'tree' = 'tree',
   fileFilteringOptions?: FileFilteringOptions,
 ): Promise<{ memoryContent: string; fileCount: number }> {
@@ -445,6 +446,7 @@ export async function loadHierarchicalLlxprtMemory(
     debugMode,
     fileService,
     extensionContextFilePaths,
+    folderTrust,
     memoryImportFormat,
     fileFilteringOptions,
     settings.memoryDiscoveryMaxDirs,
@@ -561,10 +563,8 @@ export async function loadCliConfig(
 
   const ideClient = await IdeClient.getInstance();
 
-  const folderTrustFeature = settings.folderTrustFeature ?? false;
-  const folderTrustSetting = settings.folderTrust ?? true;
-  const folderTrust = folderTrustFeature && folderTrustSetting;
-  const trustedFolder = folderTrust ? isWorkspaceTrusted(settings) : true;
+  const folderTrust = settings.folderTrust ?? false;
+  const trustedFolder = isWorkspaceTrusted(settings) ?? true;
 
   const allExtensions = annotateActiveExtensions(
     extensions,
@@ -612,6 +612,7 @@ export async function loadCliConfig(
     fileService,
     effectiveSettings,
     extensionContextFilePaths,
+    trustedFolder,
     memoryImportFormat,
     fileFiltering,
   );
@@ -833,7 +834,6 @@ export async function loadCliConfig(
     ideMode,
     ideClient,
     chatCompression: settings.chatCompression,
-    folderTrustFeature,
     interactive,
     folderTrust,
     trustedFolder,

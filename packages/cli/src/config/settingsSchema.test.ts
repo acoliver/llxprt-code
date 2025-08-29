@@ -51,7 +51,6 @@ describe('SettingsSchema', () => {
         'loadMemoryFromIncludeDirectories',
         'model',
         'hasSeenIdeIntegrationNudge',
-        'folderTrustFeature',
         'useRipgrep',
         'debugKeystrokeLogging',
       ];
@@ -241,14 +240,6 @@ describe('SettingsSchema', () => {
       expect(SETTINGS_SCHEMA.loadMemoryFromIncludeDirectories.default).toBe(
         false,
       );
-    });
-
-    it('should have folderTrustFeature setting in schema', () => {
-      expect(SETTINGS_SCHEMA.folderTrustFeature).toBeDefined();
-      expect(SETTINGS_SCHEMA.folderTrustFeature.type).toBe('boolean');
-      expect(SETTINGS_SCHEMA.folderTrustFeature.category).toBe('General');
-      expect(SETTINGS_SCHEMA.folderTrustFeature.default).toBe(false);
-      expect(SETTINGS_SCHEMA.folderTrustFeature.showInDialog).toBe(true);
     });
 
     it('should have debugKeystrokeLogging setting in schema', () => {

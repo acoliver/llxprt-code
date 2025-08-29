@@ -24,21 +24,16 @@ export const useFolderTrust = (settings: LoadedSettings, config: Config) => {
   );
   const [isRestarting, setIsRestarting] = useState(false);
 
-  const { folderTrust, folderTrustFeature } = settings.merged;
+  const { folderTrust } = settings.merged;
   useEffect(() => {
     const trusted = isWorkspaceTrusted({
-      security: {
-        folderTrust: {
-          featureEnabled: folderTrustFeature,
-          enabled: folderTrust,
-        },
-      },
+      folderTrust,
     } as Settings);
     setIsTrusted(trusted);
     if (trusted === undefined) {
       setIsFolderTrustDialogOpen(true);
     }
-  }, [folderTrust, folderTrustFeature]);
+  }, [folderTrust]);
 
   const handleFolderTrustSelect = useCallback(
     (choice: FolderTrustChoice) => {

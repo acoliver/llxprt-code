@@ -262,7 +262,6 @@ export interface ConfigParameters {
   blockedMcpServers?: Array<{ name: string; extensionName: string }>;
   noBrowser?: boolean;
   summarizeToolOutput?: Record<string, SummarizeToolOutputSettings>;
-  folderTrustFeature?: boolean;
   folderTrust?: boolean;
   ideMode?: boolean;
   ideClient?: IdeClient;
@@ -326,7 +325,6 @@ export class Config {
   private readonly originalModel: string;
   private readonly extensionContextFilePaths: string[];
   private readonly noBrowser: boolean;
-  private readonly folderTrustFeature: boolean;
   private readonly folderTrust: boolean;
   private ideMode: boolean;
   private ideClient!: IdeClient;
@@ -439,7 +437,6 @@ export class Config {
     this._blockedMcpServers = params.blockedMcpServers ?? [];
     this.noBrowser = params.noBrowser ?? false;
     this.summarizeToolOutput = params.summarizeToolOutput;
-    this.folderTrustFeature = params.folderTrustFeature ?? false;
     this.folderTrust = params.folderTrust ?? false;
     this.ideMode = params.ideMode ?? false;
     this.complexityAnalyzerSettings = params.complexityAnalyzer ?? {
@@ -1004,10 +1001,10 @@ export class Config {
     return this.ideMode;
   }
 
-  getFolderTrustFeature(): boolean {
-    return this.folderTrustFeature;
-  }
-
+  /**
+   * Returns 'true' if the workspace is considered "trusted".
+   * 'false' for untrusted.
+   */
   getFolderTrust(): boolean {
     return this.folderTrust;
   }

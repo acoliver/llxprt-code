@@ -519,22 +519,13 @@ export const SETTINGS_SCHEMA = {
     description: 'Whether the user has seen the IDE integration nudge.',
     showInDialog: false,
   },
-  folderTrustFeature: {
-    type: 'boolean',
-    label: 'Folder Trust Feature',
-    category: 'General',
-    requiresRestart: true,
-    default: false,
-    description: 'Enable folder trust feature for enhanced security.',
-    showInDialog: true,
-  },
   folderTrust: {
     type: 'boolean',
     label: 'Folder Trust',
     category: 'General',
     requiresRestart: true,
     default: false,
-    description: 'Setting to track whether Folder trust is enabled.',
+    description: 'Enable folder trust for enhanced security.',
     showInDialog: true,
   },
   chatCompression: {

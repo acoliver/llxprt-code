@@ -10,15 +10,13 @@ import * as path from 'path';
 import { homedir } from 'os';
 import { bfsFileSearch } from './bfsFileSearch.js';
 import {
-  LLXPRT_CONFIG_DIR as GEMINI_CONFIG_DIR,
-  getAllLlxprtMdFilenames as getAllGeminiMdFilenames,
+  LLXPRT_CONFIG_DIR,
+  getAllLlxprtMdFilenames,
 } from '../tools/memoryTool.js';
-import { FileDiscoveryService } from '../services/fileDiscoveryService.js';
+import type { FileDiscoveryService } from '../services/fileDiscoveryService.js';
 import { processImports } from './memoryImportProcessor.js';
-import {
-  DEFAULT_MEMORY_FILE_FILTERING_OPTIONS,
-  FileFilteringOptions,
-} from '../config/config.js';
+import type { FileFilteringOptions } from '../config/config.js';
+import { DEFAULT_MEMORY_FILE_FILTERING_OPTIONS } from '../config/config.js';
 
 // Simple console logger, similar to the one previously in CLI's config.ts
 // TODO: Integrate with a more robust server-side logger if available/appropriate.
@@ -89,6 +87,7 @@ async function getGeminiMdFilePathsInternal(
   debugMode: boolean,
   fileService: FileDiscoveryService,
   extensionContextFilePaths: string[] = [],
+  folderTrust: boolean,
   fileFilteringOptions: FileFilteringOptions,
   maxDirs: number,
 ): Promise<string[]> {
@@ -111,6 +110,7 @@ async function getGeminiMdFilePathsInternal(
         debugMode,
         fileService,
         extensionContextFilePaths,
+        folderTrust,
         fileFilteringOptions,
         maxDirs,
       ),
@@ -140,17 +140,18 @@ async function getGeminiMdFilePathsInternalForEachDir(
   debugMode: boolean,
   fileService: FileDiscoveryService,
   extensionContextFilePaths: string[] = [],
+  folderTrust: boolean,
   fileFilteringOptions: FileFilteringOptions,
   maxDirs: number,
 ): Promise<string[]> {
   const allPaths = new Set<string>();
-  const geminiMdFilenames = getAllGeminiMdFilenames();
+  const geminiMdFilenames = getAllLlxprtMdFilenames();
 
   for (const geminiMdFilename of geminiMdFilenames) {
     const resolvedHome = path.resolve(userHomePath);
     const globalMemoryPath = path.join(
       resolvedHome,
-      GEMINI_CONFIG_DIR,
+      LLXPRT_CONFIG_DIR,
       geminiMdFilename,
     );
 
@@ -168,7 +169,7 @@ async function getGeminiMdFilePathsInternalForEachDir(
 
     // FIX: Only perform the workspace search (upward and downward scans)
     // if a valid currentWorkingDirectory is provided.
-    if (dir) {
+    if (dir && folderTrust) {
       const resolvedCwd = path.resolve(dir);
       if (debugMode)
         logger.debug(
@@ -186,7 +187,7 @@ async function getGeminiMdFilePathsInternalForEachDir(
         : path.dirname(resolvedHome);
 
       while (currentDir && currentDir !== path.dirname(currentDir)) {
-        if (currentDir === path.join(resolvedHome, GEMINI_CONFIG_DIR)) {
+        if (currentDir === path.join(resolvedHome, LLXPRT_CONFIG_DIR)) {
           break;
         }
 
@@ -208,7 +209,7 @@ async function getGeminiMdFilePathsInternalForEachDir(
       }
       upwardPaths.forEach((p) => allPaths.add(p));
 
-      const mergedOptions = {
+      const mergedOptions: FileFilteringOptions = {
         ...DEFAULT_MEMORY_FILE_FILTERING_OPTIONS,
         ...fileFilteringOptions,
       };
@@ -236,7 +237,7 @@ async function getGeminiMdFilePathsInternalForEachDir(
 
   if (debugMode)
     logger.debug(
-      `Final ordered ${getAllGeminiMdFilenames()} paths to read: ${JSON.stringify(
+      `Final ordered ${getAllLlxprtMdFilenames()} paths to read: ${JSON.stringify(
         finalPaths,
       )}`,
     );
@@ -281,7 +282,7 @@ async function readGeminiMdFiles(
             const message =
               error instanceof Error ? error.message : String(error);
             logger.warn(
-              `Warning: Could not read ${getAllGeminiMdFilenames()} file at ${filePath}. Error: ${message}`,
+              `Warning: Could not read ${getAllLlxprtMdFilenames()} file at ${filePath}. Error: ${message}`,
             );
           }
           if (debugMode) logger.debug(`Failed to read: ${filePath}`);
@@ -329,6 +330,11 @@ function concatenateInstructions(
     .join('\n\n');
 }
 
+export interface LoadServerHierarchicalMemoryResponse {
+  memoryContent: string;
+  fileCount: number;
+}
+
 /**
  * Loads hierarchical GEMINI.md files and concatenates their content.
  * This function is intended for use by the server.
@@ -339,10 +345,11 @@ export async function loadServerHierarchicalMemory(
   debugMode: boolean,
   fileService: FileDiscoveryService,
   extensionContextFilePaths: string[] = [],
+  folderTrust: boolean,
   importFormat: 'flat' | 'tree' = 'tree',
   fileFilteringOptions?: FileFilteringOptions,
   maxDirs: number = 200,
-): Promise<{ memoryContent: string; fileCount: number }> {
+): Promise<LoadServerHierarchicalMemoryResponse> {
   if (debugMode)
     logger.debug(
       `Loading server hierarchical memory for CWD: ${currentWorkingDirectory} (importFormat: ${importFormat})`,
@@ -358,6 +365,7 @@ export async function loadServerHierarchicalMemory(
     debugMode,
     fileService,
     extensionContextFilePaths,
+    folderTrust,
     fileFilteringOptions || DEFAULT_MEMORY_FILE_FILTERING_OPTIONS,
     maxDirs,
   );
