@@ -25,7 +25,7 @@ This phase creates comprehensive behavioral tests for the GeminiChat-HistoryServ
 
 **Test Infrastructure Requirements:**
 ```typescript
-// Mock IHistoryService interface for testing
+// IHistoryService interface for testing (REQUIRED - not optional)
 interface IHistoryService {
   addMessage(content: Content, metadata?: any): string;
   getCuratedHistory(): Message[];
@@ -47,9 +47,9 @@ const REAL_CONVERSATION_DATA = {
 ```
 
 **Success Criteria:**
-- Mock IHistoryService interface matches expected contract
+- IHistoryService interface matches expected contract
 - Real conversation data covers all integration scenarios
-- Test infrastructure supports both service-enabled and service-disabled modes
+- Test infrastructure validates HistoryService is always required
 
 ### Task 2: RecordHistory Integration Tests
 
@@ -58,28 +58,22 @@ const REAL_CONVERSATION_DATA = {
 **Test Cases:**
 ```typescript
 describe('recordHistory integration', () => {
-  test('delegates to historyService when enabled', () => {
-    // Test that recordHistory calls historyService.addMessage when service is enabled
+  test('delegates to historyService (REQUIRED)', () => {
+    // Test that recordHistory calls historyService.addMessage
     // Verify correct parameters are passed
-    // Ensure original array is NOT modified when service is active
+    // Ensure original array is NOT modified - service handles everything
   });
 
-  test('uses direct service for array behavior when service disabled', () => {
-    // Test that recordHistory uses original array logic when service disabled
-    // Verify direct array modifications occur
-    // Ensure direct replacement is maintained
-  });
-
-  test('handles service errors gracefully with service delegation', () => {
+  test('handles service errors gracefully', () => {
     // Test error handling when historyService.addMessage throws
-    // Verify service delegation behavior occurs
-    // Ensure conversation is not lost due to service failure
+    // Verify error is properly reported
+    // Service is REQUIRED - no fallback
   });
 
   test('preserves tool call merging behavior', () => {
-    // Test that tool call preservation logic still works through service
+    // Test that tool call preservation logic works through service
     // Verify tool calls and responses are properly grouped
-    // Test both service-enabled and service-disabled modes
+    // Service is REQUIRED for all operations
   });
 
   test('handles automatic function calling history through service', () => {
@@ -103,16 +97,10 @@ describe('recordHistory integration', () => {
 **Test Cases:**
 ```typescript
 describe('extractCuratedHistory integration', () => {
-  test('delegates to historyService.getCuratedHistory when enabled', () => {
+  test('delegates to historyService.getCuratedHistory (REQUIRED)', () => {
     // Test service delegation with real conversation history
     // Verify Message[] to Content[] conversion works correctly
-    // Ensure curated history filtering logic is preserved
-  });
-
-  test('uses direct service for original filtering when service disabled', () => {
-    // Test original array-based filtering logic
-    // Verify invalid content is properly filtered out
-    // Ensure direct replacement maintained
+    // Ensure curated history filtering logic is preserved through service
   });
 
   test('handles message-to-content conversion correctly', () => {
@@ -142,16 +130,10 @@ describe('extractCuratedHistory integration', () => {
 **Test Cases:**
 ```typescript
 describe('shouldMergeToolResponses integration', () => {
-  test('delegates merge decision to service when enabled', () => {
-    // Test that service makes merge decisions when enabled
+  test('delegates merge decision to service (REQUIRED)', () => {
+    // Test that service makes merge decisions
     // Verify tool response detection logic works through service
-    // Ensure merge behavior is consistent with original logic
-  });
-
-  test('uses original merge logic when service disabled', () => {
-    // Test original shouldMergeToolResponses logic
-    // Verify tool response detection and history analysis
-    // Ensure direct replacement maintained
+    // Service is REQUIRED - no fallback logic
   });
 
   test('handles multiple tool responses correctly', () => {
@@ -168,35 +150,29 @@ describe('shouldMergeToolResponses integration', () => {
 });
 ```
 
-### Task 5: service integration Integration Tests
+### Task 5: HistoryService Requirement Tests
 
-**Target:** Behavioral tests for runtime service switching
+**Target:** Behavioral tests validating HistoryService is always required
 
 **Test Cases:**
 ```typescript
-describe('service integration switching', () => {
-  test('enableHistoryService switches behavior correctly', () => {
-    // Test runtime switch from array to service behavior
-    // Verify all methods begin using service after enable
-    // Ensure state is properly initialized
+describe('HistoryService requirement validation', () => {
+  test('constructor requires HistoryService parameter', () => {
+    // Test that HistoryService is a required parameter
+    // Verify no optional usage is allowed
+    // Ensure proper initialization with service
   });
 
-  test('disableHistoryService switches back to array behavior', () => {
-    // Test runtime switch from service back to array behavior
-    // Verify original logic is restored correctly
-    // Ensure no service calls occur after disable
+  test('all methods use HistoryService directly', () => {
+    // Test that all history operations go through service
+    // Verify no array-based fallback exists
+    // Service is mandatory for all operations
   });
 
-  test('maintains conversation state through service switches', () => {
-    // Test conversation continuity when switching between modes
-    // Verify history is preserved during switches
-    // Ensure no data is lost during transitions
-  });
-
-  test('handles service switching during active conversations', () => {
-    // Test switching modes in middle of conversation
-    // Verify pending operations complete appropriately
-    // Ensure no corruption of conversation state
+  test('maintains conversation state through service', () => {
+    // Test conversation continuity with service
+    // Verify history is properly managed by service
+    // Ensure all data flows through service
   });
 });
 ```
@@ -208,16 +184,10 @@ describe('service integration switching', () => {
 **Test Cases:**
 ```typescript
 describe('complete conversation workflows', () => {
-  test('full conversation with service enabled throughout', () => {
+  test('full conversation with required HistoryService', () => {
     // Test complete conversation from start to finish with service
     // Include user messages, model responses, tool calls, tool responses
-    // Verify history consistency and accessibility
-  });
-
-  test('mixed mode conversation (service enabled mid-conversation)', () => {
-    // Start conversation with array behavior
-    // Switch to service mid-conversation  
-    // Verify seamless transition and history preservation
+    // Verify history consistency through service
   });
 
   test('complex tool interaction workflows', () => {
@@ -248,14 +218,14 @@ All test files MUST include these markers for traceability:
 
 **All tests must pass with the following verification:**
 
-- [ ] RecordHistory integration tests pass (service delegation + service delegation)
+- [ ] RecordHistory integration tests pass (service delegation)
 - [ ] ExtractCuratedHistory integration tests pass (message conversion + filtering)
-- [ ] ShouldMergeToolResponses integration tests pass (merge logic preservation)
-- [ ] service integration switching tests pass (runtime mode changes)
+- [ ] ShouldMergeToolResponses integration tests pass (service delegation)
+- [ ] HistoryService requirement tests pass (validates mandatory service)
 - [ ] End-to-end workflow tests pass (complete conversation scenarios)
 - [ ] Tests use REAL conversation data, not minimal mocks
 - [ ] Tests verify INTEGRATION behavior, not isolated unit behavior
-- [ ] All tests pass in both service-enabled and service-disabled modes
+- [ ] All tests validate HistoryService is REQUIRED (not optional)
 - [ ] No regression in existing GeminiChat functionality detected
 - [ ] Test coverage includes error scenarios and edge cases
 
@@ -276,8 +246,8 @@ All test files MUST include these markers for traceability:
 **Integration Testing Approach:**
 - Test GeminiChat methods end-to-end, not individual service calls
 - Verify the complete data flow from method input to final history state
-- Test both service-enabled and service-disabled code paths
-- Ensure direct replacement is preserved in all scenarios
+- Test that HistoryService is always required (no optional usage)
+- Ensure service handles all history operations
 
 ## Verification Commands
 

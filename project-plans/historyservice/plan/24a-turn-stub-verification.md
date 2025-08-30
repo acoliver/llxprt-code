@@ -12,20 +12,20 @@ This verification phase ensures that the Turn.ts integration stub has been corre
 
 ### 1. File Structure Check
 ```bash
-# Verify Turn.ts exists and contains modifications
-ls -la packages/core/src/Turn.ts
+# Verify turn.ts exists and contains modifications
+ls -la packages/core/src/core/turn.ts
 ```
 
 ### 2. Code Analysis - Integration Points
 ```bash
 # Check for HistoryService import
-grep -n "HistoryService" packages/core/src/Turn.ts
+grep -n "HistoryService" packages/core/src/core/turn.ts
 
 # Check for handlePendingFunctionCall modifications around line 304
-grep -A 10 -B 5 "handlePendingFunctionCall" packages/core/src/Turn.ts
+grep -A 10 -B 5 "handlePendingFunctionCall" packages/core/src/core/turn.ts
 
 # Verify pending/commit pattern implementation
-grep -n "pendingHistoryItem\|commitHistoryItem" packages/core/src/Turn.ts
+grep -n "pendingHistoryItem\|commitHistoryItem" packages/core/src/core/turn.ts
 ```
 
 ### 3. TypeScript Compilation Check
@@ -37,28 +37,24 @@ npx tsc --noEmit
 
 ### 4. Callback Preservation Check
 ```bash
-# Verify CoreToolScheduler callbacks are maintained
-grep -A 5 -B 5 "CoreToolScheduler" packages/core/src/Turn.ts
-
 # Check TurnEmitter events are preserved
-grep -n "TurnEmitter\|emit" packages/core/src/Turn.ts
+grep -n "TurnEmitter\|emit" packages/core/src/core/turn.ts
 ```
 
 ### 5. Integration Pattern Check
 ```bash
 # Look for proper pending/commit pattern in function calls
-grep -A 15 "handlePendingFunctionCall" packages/core/src/Turn.ts | grep -E "(pending|commit)"
+grep -A 15 "handlePendingFunctionCall" packages/core/src/core/turn.ts | grep -E "(pending|commit)"
 ```
 
 ## Success Criteria
 
 ### ✅ Critical Requirements
-1. **handlePendingFunctionCall method modified** - Method exists around line 304 with HistoryService integration
+1. **handlePendingFunctionCall method modified** - Method exists around line 327 with HistoryService integration
 2. **HistoryService integration points added** - Import statement and usage present
 3. **Pending/commit pattern implemented** - Proper two-phase history tracking in place
-4. **CoreToolScheduler callbacks preserved** - Existing callback functionality maintained
-5. **TurnEmitter events maintained** - All existing event emissions preserved
-6. **TypeScript compilation success** - No compilation errors introduced
+4. **TurnEmitter events maintained** - All existing event emissions preserved
+5. **TypeScript compilation success** - No compilation errors introduced
 
 ### ✅ Code Quality Checks
 1. **Proper error handling** - History operations wrapped in try-catch blocks
@@ -121,25 +117,15 @@ npx tsc --noEmit 2>&1 | head -20
 ```bash
 # Re-implement the integration following Phase 24 specification
 # Check Phase 24 document for exact requirements
-grep -n "class Turn" packages/core/src/Turn.ts
+grep -n "class Turn" packages/core/src/core/turn.ts
 ```
 
-#### 3. Callback Interference
-**Issue:** Existing callbacks broken
-**Recovery:**
-```bash
-# Identify affected callbacks
-grep -B 10 -A 10 "callback" packages/core/src/Turn.ts
-
-# Ensure history integration doesn't interfere with existing patterns
-```
-
-#### 4. Event System Disruption
+#### 3. Event System Disruption
 **Issue:** TurnEmitter events not working
 **Recovery:**
 ```bash
 # Check all emit calls are preserved
-grep -n "emit" packages/core/src/Turn.ts
+grep -n "emit" packages/core/src/core/turn.ts
 
 # Verify event flow isn't interrupted by history operations
 ```
@@ -149,16 +135,16 @@ grep -n "emit" packages/core/src/Turn.ts
 ### Quick Verification Script
 ```bash
 #!/bin/bash
-echo "=== Turn.ts Integration Stub Verification ==="
+echo "=== turn.ts Integration Stub Verification ==="
 
 # 1. Check file exists
-if [ ! -f "packages/core/src/Turn.ts" ]; then
-    echo "❌ Turn.ts not found"
+if [ ! -f "packages/core/src/core/turn.ts" ]; then
+    echo "❌ turn.ts not found"
     exit 1
 fi
 
 # 2. Check HistoryService integration
-if ! grep -q "HistoryService" packages/core/src/Turn.ts; then
+if ! grep -q "HistoryService" packages/core/src/core/turn.ts; then
     echo "❌ HistoryService integration not found"
     exit 1
 fi
@@ -171,7 +157,7 @@ if ! npx tsc --noEmit > /dev/null 2>&1; then
 fi
 
 # 4. Check handlePendingFunctionCall modification
-if ! grep -A 10 "handlePendingFunctionCall" packages/core/src/Turn.ts | grep -q "history"; then
+if ! grep -A 10 "handlePendingFunctionCall" packages/core/src/core/turn.ts | grep -q "history"; then
     echo "❌ handlePendingFunctionCall not modified for history"
     exit 1
 fi

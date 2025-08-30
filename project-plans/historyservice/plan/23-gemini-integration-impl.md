@@ -14,9 +14,9 @@
 
 ## Implementation Overview
 
-This phase completes the GeminiChat-HistoryService integration by implementing full delegation to HistoryService for all history operations. The implementation focuses on **direct replacement** at exact line numbers without compatibility shims.
+This phase completes the GeminiChat-HistoryService integration by implementing full delegation to HistoryService for all history operations. The implementation focuses on **direct replacement** making HistoryService REQUIRED.
 
-**Critical:** This phase performs DIRECT replacement of existing functionality. When service is enabled, existing array manipulations are completely bypassed in favor of service delegation.
+**Critical:** HistoryService is MANDATORY. There is NO optional usage, NO fallback mode, and NO array-based alternative. The service must always be provided.
 
 ## Implementation Tasks
 
@@ -32,52 +32,31 @@ This phase completes the GeminiChat-HistoryService integration by implementing f
 // @phase gemini-integration-impl
 // DIRECT REPLACEMENT at lines 1034-1165
 private recordHistory(content: Content): void {
-  // Service delegation takes priority - NO array manipulation when enabled
-  if (this.historyService integration && this.historyService) {
-    try {
-      // Convert Content to service format
-      const messageContent = this.extractContentForService(content);
-      const role = this.convertContentToServiceRole(content.role);
-      const metadata = {
-        timestamp: Date.now(),
-        source: 'geminiChat.recordHistory',
-        originalContent: content,
-        contentType: this.detectContentType(content)
-      };
-      
-      // Delegate to service - this replaces ALL existing logic
-      this.historyService.addMessage(messageContent, role, metadata);
-      return; // CRITICAL: No array manipulation - service handles all history
-    } catch (error) {
-      console.error('HistoryService.addMessage failed:', error);
-      // Service failure - propagate error
-      this.historyService integration = false;
-      // direct service delegation replaces original logic
-    }
+  // HistoryService is REQUIRED - no fallback
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
   }
-
-  // Original array-based logic (preserved for service-disabled mode)
-  // EXISTING LOGIC FROM LINES 1034-1165 PRESERVED HERE
-  // [Original recordHistory implementation stays exactly as-is]
   
-  // Automatic function calling history logic
-  if (automaticFunctionCallingHistory) {
-    this.history.push(...automaticFunctionCallingHistory);
+  try {
+    // Convert Content to service format
+    const messageContent = this.extractContentForService(content);
+    const role = this.convertContentToServiceRole(content.role);
+    const metadata = {
+      timestamp: Date.now(),
+      source: 'geminiChat.recordHistory',
+      originalContent: content,
+      contentType: this.detectContentType(content)
+    };
+    
+    // Delegate to service - this is the ONLY path
+    this.historyService.addMessage(messageContent, role, metadata);
+  } catch (error) {
+    console.error('HistoryService.addMessage failed:', error);
+    // Service failure - propagate error (no fallback)
+    throw error;
   }
-
-  // Complex tool call merging and validation logic
-  if (this.shouldMergeToolResponses(content)) {
-    const lastMessage = this.history[this.history.length - 1];
-    if (lastMessage && lastMessage.role === content.role) {
-      lastMessage.parts.push(...(content.parts || []));
-      return;
-    }
-  }
-
-  // Standard content validation and recording
-  if (this.isValidContent(content)) {
-    this.history.push(content);
-  }
+  
+  // NO array-based fallback - HistoryService handles everything
 }
 ```
 
@@ -96,42 +75,22 @@ private recordHistory(content: Content): void {
 // @requirement HS-049
 // DIRECT REPLACEMENT at lines 232-276
 private extractCuratedHistory(): Content[] {
-  // Service delegation takes priority
-  if (this.historyService integration && this.historyService) {
-    try {
-      // Get curated history from service
-      const curatedMessages = this.historyService.getCuratedHistory();
-      
-      // Convert service Messages back to Content format
-      return curatedMessages.map(message => this.convertServiceMessageToContent(message));
-    } catch (error) {
-      console.error('HistoryService.getCuratedHistory failed:', error);
-      // service delegation on service failure
-      this.historyService integration = false;
-      // direct service delegation replaces original logic
-    }
+  // HistoryService is REQUIRED - no fallback
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
   }
-
-  // Original array-based filtering logic (preserved for service-disabled mode)
-  // EXISTING LOGIC FROM LINES 232-276 PRESERVED HERE
-  const validContent = this.history.filter(content => {
-    if (!content || !content.parts) return false;
+  
+  try {
+    // Get curated history from service
+    const curatedMessages = this.historyService.getCuratedHistory();
     
-    // Filter out empty responses
-    if (content.role === 'model' && (!content.parts.length || 
-        content.parts.every(part => !part.text || part.text.trim() === ''))) {
-      return false;
-    }
-    
-    // Keep tool responses with valid content
-    if (content.role === 'user' && content.parts.some(part => part.functionResponse)) {
-      return true;
-    }
-    
-    return content.parts.some(part => part.text && part.text.trim().length > 0);
-  });
-
-  return validContent;
+    // Convert service Messages back to Content format
+    return curatedMessages.map(message => this.convertServiceMessageToContent(message));
+  } catch (error) {
+    console.error('HistoryService.getCuratedHistory failed:', error);
+    // Service failure - propagate error (no fallback)
+    throw error;
+  }
 }
 ```
 
@@ -151,21 +110,11 @@ private extractCuratedHistory(): Content[] {
 private shouldMergeToolResponses(content: Content): boolean {
   // REQUIRED: HistoryService handles all decisions
   // NO fallback - HistoryService is mandatory
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
+  
   return this.historyService.shouldMergeToolResponses(content);
-  // EXISTING LOGIC FROM LINES 1198-1253 PRESERVED HERE
-  
-  // Check if content is tool response
-  if (content.role !== 'user') return false;
-  if (!content.parts || !content.parts.some(part => part.functionResponse)) return false;
-  
-  // Check history for previous tool responses to merge with
-  if (this.history.length === 0) return false;
-  
-  const lastMessage = this.history[this.history.length - 1];
-  if (!lastMessage || lastMessage.role !== 'user') return false;
-  
-  // Check if last message also contains tool responses
-  return lastMessage.parts && lastMessage.parts.some(part => part.functionResponse);
 }
 ```
 
@@ -185,21 +134,12 @@ private shouldMergeToolResponses(content: Content): boolean {
 // Replace direct history.push calls at specific lines within sendMessage
 
 // At line ~540 (where orphaned tool call fixing occurs):
-if (this.historyService integration && this.historyService) {
-  // Use service to add fixed tool calls instead of direct array push
-  this.recordHistory(fixedToolCall);
-} else {
-  this.history.push(fixedToolCall);
-}
+// HistoryService is REQUIRED - no conditional
+this.recordHistory(fixedToolCall);
 
 // At line ~565 (where user message is recorded):
-if (this.historyService integration && this.historyService) {
-  // Use recordHistory service delegation
-  this.recordHistory(content);
-} else {
-  // Direct array manipulation for service-disabled mode
-  this.history.push(content);
-}
+// HistoryService is REQUIRED - no conditional
+this.recordHistory(content);
 ```
 
 **sendMessageStream method (around line 745):**
@@ -209,11 +149,8 @@ if (this.historyService integration && this.historyService) {
 // Replace direct history.push at line ~745
 
 // Replace: this.history.push(content);
-if (this.historyService integration && this.historyService) {
-  this.recordHistory(content);
-} else {
-  this.history.push(content);
-}
+// HistoryService is REQUIRED - no conditional
+this.recordHistory(content);
 ```
 
 ### Task 5: Implement Service Conversion Helper Methods
@@ -297,105 +234,65 @@ private detectContentType(content: Content): string {
 constructor(
   apiKey: string,
   model: string,
-  systemPrompt?: string,
-  historyService?: IHistoryService
+  systemPrompt: string | undefined,
+  historyService: IHistoryService // REQUIRED - not optional
 ) {
   // Existing initialization
   this.apiKey = apiKey;
   this.model = model;
   this.systemPrompt = systemPrompt;
   
-  // Complete service integration
-  if (historyService) {
-    this.historyService = historyService;
-    this.historyService integration = true;
-    
-    // Initialize service with system prompt if provided
-    if (systemPrompt) {
-      try {
-        this.historyService.addMessage(
-          systemPrompt,
-          MessageRole.SYSTEM,
-          { timestamp: Date.now(), source: 'constructor' }
-        );
-      } catch (error) {
-        console.warn('Failed to initialize HistoryService with system prompt:', error);
-      }
+  // HistoryService is REQUIRED
+  if (!historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
+  
+  this.historyService = historyService;
+  
+  // Initialize service with system prompt if provided
+  if (systemPrompt) {
+    try {
+      this.historyService.addMessage(
+        systemPrompt,
+        MessageRole.SYSTEM,
+        { timestamp: Date.now(), source: 'constructor' }
+      );
+    } catch (error) {
+      console.warn('Failed to initialize HistoryService with system prompt:', error);
     }
-  } else {
-    // Keep existing behavior for direct replacement
-    this.history = [];
-    this.historyService integration = false;
   }
 }
 ```
 
-### Task 7: Implement Service Control Methods
+### Task 7: Implement Service Access Methods
 
-**Target:** Complete the enable/disable methods:
+**Target:** Complete the service access methods:
 
 ```typescript
 // @plan PLAN-20250128-HISTORYSERVICE.P23
 // @requirement HS-049
-// Complete service control methods
+// Service access methods (NO enable/disable - service is REQUIRED)
 
-public enableHistoryService(historyService: IHistoryService): void {
-  this.historyService = historyService;
-  this.historyService integration = true;
-  
-  // Migrate existing history if present
-  if (this.history && this.history.length > 0) {
-    console.log(`Migrating ${this.history.length} existing messages to HistoryService`);
-    
-    for (const content of this.history) {
-      try {
-        const messageContent = this.extractContentForService(content);
-        const role = this.convertContentToServiceRole(content.role);
-        const metadata = {
-          timestamp: Date.now(),
-          source: 'migration',
-          originalContent: content
-        };
-        
-        historyService.addMessage(messageContent, role, metadata);
-      } catch (error) {
-        console.error('Failed to migrate message:', error);
-      }
-    }
-    
-    // Clear array after successful migration
-    this.history = [];
-  }
-}
-
-public disableHistoryService(): void {
-  if (this.historyService integration && this.historyService) {
-    try {
-      // Migrate service history back to array
-      const serviceHistory = this.historyService.getCuratedHistory();
-      this.history = serviceHistory.map(msg => this.convertServiceMessageToContent(msg));
-    } catch (error) {
-      console.error('Failed to migrate service history back to array:', error);
-      this.history = []; // Reset to empty on failure
-    }
-  }
-  
-  this.historyService integration = false;
-  this.historyService = undefined;
-}
-
-// Add getter for current history (service-aware)
+// Add getter for current history (service-only)
 public getCurrentHistory(): Content[] {
-  if (this.historyService integration && this.historyService) {
-    try {
-      return this.extractCuratedHistory();
-    } catch (error) {
-      console.error('Failed to get service history, falling back to array:', error);
-      return this.history || [];
-    }
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
   }
   
-  return this.history || [];
+  try {
+    return this.extractCuratedHistory();
+  } catch (error) {
+    console.error('Failed to get service history:', error);
+    throw error; // No fallback - service is required
+  }
+}
+
+// Getter to access the HistoryService directly if needed
+public getHistoryService(): IHistoryService {
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
+  return this.historyService;
 }
 ```
 
@@ -413,36 +310,35 @@ All implementation code MUST include these markers for traceability:
 
 **Phase 23 passes when ALL of the following are implemented:**
 
-- [ ] RecordHistory method completely delegates to HistoryService when enabled
-- [ ] ExtractCuratedHistory method completely delegates to HistoryService when enabled
-- [ ] ShouldMergeToolResponses method completely delegates to HistoryService when enabled
-- [ ] Direct history array manipulations in sendMessage/sendMessageStream are replaced with service calls
+- [ ] RecordHistory method ALWAYS delegates to HistoryService (required)
+- [ ] ExtractCuratedHistory method ALWAYS delegates to HistoryService (required)
+- [ ] ShouldMergeToolResponses method ALWAYS delegates to HistoryService (required)
+- [ ] ALL history operations use HistoryService (no array fallback)
 - [ ] Service conversion helper methods are fully implemented
-- [ ] Constructor properly initializes HistoryService when provided
-- [ ] EnableHistoryService/disableHistoryService methods include migration logic
-- [ ] service integration properly controls which implementation is used
-- [ ] NO array manipulation occurs when service is enabled (direct replacement)
+- [ ] Constructor REQUIRES HistoryService parameter (not optional)
+- [ ] NO enable/disable methods - service is always required
+- [ ] NO array manipulation occurs anywhere
 - [ ] All Phase 22 integration tests pass
 - [ ] TypeScript compilation passes without errors
-- [ ] Existing functionality preserved when service is disabled
+- [ ] HistoryService is validated as REQUIRED everywhere
 
 ## Critical Implementation Requirements
 
 **Direct Replacement Strategy:**
-- When `historyService integration = true`, existing array logic is completely bypassed
+- HistoryService is MANDATORY - no conditional logic
 - No "compatibility shims" or dual-path logic
-- Service delegation happens first, original logic preserved only for service delegation
-- Array access only occurs when service is disabled or fails
+- Service is the ONLY implementation - no fallback
+- NO array access anywhere
 
 **Error Handling:**
-- Service failures automatically disable service and service delegation behavior
-- Migration failures are logged but don't prevent operation
-- Service errors don't crash existing functionality
+- Service failures are propagated - no fallback
+- Errors indicate misconfiguration or service issues
+- No silent failures or automatic degradation
 
-**direct replacement:**
-- Constructor REQUIRES HistoryService parameter (NOT optional - breaking change)
-- When no historyService provided, behavior is identical to pre-integration
-- Existing tests continue to work with service disabled
+**Breaking Change:**
+- Constructor REQUIRES HistoryService parameter (NOT optional)
+- No fallback mode exists
+- All consumers MUST provide HistoryService
 
 ## Implementation Verification Commands
 
@@ -467,8 +363,8 @@ npx tsc --noEmit --project tsconfig.json
 grep -n "historyService integration.*historyService" src/core/geminiChat.ts
 grep -n "historyService\." src/core/geminiChat.ts
 
-# Verify no direct array manipulation when service enabled
-grep -A 5 -B 5 "history\.(push\|splice\|pop)" src/core/geminiChat.ts
+# Verify NO direct array manipulation anywhere
+grep "history\.(push\|splice\|pop)" src/core/geminiChat.ts && echo "❌ Found array manipulation" || echo "✓ No array manipulation"
 
 # Check for required code markers
 grep -c "@plan PLAN-20250128-HISTORYSERVICE.P23" src/core/geminiChat.ts
@@ -481,12 +377,12 @@ grep -c "@requirement HS-049" src/core/geminiChat.ts
 - RecordHistory integration tests fail (service not called)
 - ExtractCuratedHistory integration tests fail (service not delegated)  
 - ShouldMergeToolResponses integration tests fail (service not used)
-- service integration tests fail (switching doesn't change behavior)
+- HistoryService requirement tests fail (service not validated as required)
 
 **After Implementation (Phase 22 tests should pass):**
 - All integration tests pass with service delegation working
-- service integration switching tests pass (behavior changes correctly)
-- service delegation tests pass (array behavior on service failure)
+- HistoryService is validated as REQUIRED in all tests
+- No fallback behavior exists
 - End-to-end workflow tests pass (complete conversations work)
 
 ## Failure Recovery
@@ -496,8 +392,8 @@ grep -c "@requirement HS-049" src/core/geminiChat.ts
 1. **Compilation Errors:** Fix TypeScript issues, ensure proper imports and type compatibility
 2. **Test Failures:** Debug service delegation logic, verify conversion helpers work correctly  
 3. **Service Integration Issues:** Check IHistoryService interface compatibility
-4. **Breaking Change Enforcement:** Ensure NO fallback logic remains
-5. **Mandatory Service:** HistoryService is REQUIRED - no optional usage
+4. **Optional Service Found:** Remove ALL optional/fallback patterns
+5. **Array Access Found:** Remove ALL direct array manipulation
 
 ## Next Phase
 

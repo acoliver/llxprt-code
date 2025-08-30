@@ -6,7 +6,7 @@
 
 ## Overview
 
-This TDD phase creates comprehensive behavioral tests for Turn.ts integration with HistoryService. The tests focus on REAL tool execution flows with proper pending/commit patterns, ensuring integration works correctly with CoreToolScheduler callbacks and TurnEmitter events.
+This TDD phase creates comprehensive behavioral tests for Turn.ts integration with HistoryService. The tests focus on REAL tool execution flows with proper pending/commit patterns, ensuring integration works correctly with TurnEmitter events.
 
 ## Target Implementation
 
@@ -62,22 +62,22 @@ describe('Tool Execution Error Handling', () => {
 });
 ```
 
-### Task 3: CoreToolScheduler Callback Preservation Tests
+### Task 3: TurnEmitter Event System Preservation Tests
 **File**: `/packages/core/src/core/turn.test.ts**  
 **Location**: After Task 2 tests
 
 ```typescript
-describe('CoreToolScheduler Integration', () => {
-  test('should preserve existing CoreToolScheduler callbacks', async () => {
-    // Verify callback functionality remains intact
+describe('TurnEmitter Event System', () => {
+  test('should preserve existing event emission patterns', async () => {
+    // Verify event functionality remains intact
   });
 
-  test('should execute callbacks in correct order with history operations', async () => {
-    // Verify callback timing with history integration
+  test('should emit events in correct order with history operations', async () => {
+    // Verify event timing with history integration
   });
 
-  test('should handle callback errors without breaking history tracking', async () => {
-    // Test callback error resilience
+  test('should handle event errors without breaking history tracking', async () => {
+    // Test event error resilience
   });
 });
 ```
@@ -170,7 +170,7 @@ const createRealToolForTesting = () => {
 5. **Multiple Tool Handling** - Verify parallel tool execution with proper history tracking
 
 ### ✅ Callback Preservation Scenarios  
-1. **CoreToolScheduler Callbacks Work** - Verify existing callback functionality preserved
+1. **TurnEmitter Events Work** - Verify existing event functionality preserved
 2. **Callback Order with History** - Verify callbacks execute in correct sequence
 3. **Callback Error Resilience** - Verify callback errors don't break history
 
@@ -189,7 +189,7 @@ const createRealToolForTesting = () => {
 ### In Test File
 ```typescript
 // @plan PLAN-20250128-HISTORYSERVICE.P25
-// @requirement HS-050: Turn.ts integration with CoreToolScheduler
+// @requirement HS-050: Turn.ts integration with TurnEmitter
 // @requirement HS-011: Tool calls and responses committed atomically
 // @requirement HS-012: Abort pending tool calls capability
 ```
@@ -205,7 +205,7 @@ const createRealToolForTesting = () => {
 
 ### ✅ Test Coverage Requirements
 1. **Tool Execution Flow Coverage** - All tool execution states tested (pending, executing, success, failure, cancelled)
-2. **Callback Integration Coverage** - All CoreToolScheduler callback scenarios tested
+2. **Event Integration Coverage** - All TurnEmitter event scenarios tested
 3. **Event System Coverage** - All TurnEmitter events tested with history integration
 4. **Real Tool Coverage** - At least 2 real tools tested for integration
 5. **Error Scenario Coverage** - All failure and cancellation paths tested
@@ -288,8 +288,8 @@ turn.test.ts
 │   │   ├── should abort pending tool calls on execution failure
 │   │   ├── should abort pending tool calls on user cancellation
 │   │   └── should not commit failed tool executions to history
-│   ├── CoreToolScheduler Integration
-│   │   ├── should preserve existing CoreToolScheduler callbacks
+│   ├── TurnEmitter Event System
+│   │   ├── should preserve existing event emission patterns
 │   │   ├── should execute callbacks in correct order with history operations
 │   │   └── should handle callback errors without breaking history tracking
 │   ├── TurnEmitter Event Preservation

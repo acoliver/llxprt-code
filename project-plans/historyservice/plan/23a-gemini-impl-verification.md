@@ -203,8 +203,8 @@ grep -A 15 "convertServiceMessageToContent" /Users/acoliver/projects/claude-llxp
 ### 5. No Direct Array Manipulation Ever
 - [ ] RecordHistory NEVER calls history.push() - always uses HistoryService
 - [ ] SendMessage and sendMessageStream use recordHistory() instead of direct history.push()
-- [ ] All history access goes through service when enabled (no array bypass)
-- [ ] Service failures trigger automatic service delegation mode
+- [ ] All history access goes through HistoryService (no array bypass)
+- [ ] Service failures are propagated - no fallback mode
 
 ### 6. TypeScript Compiles Successfully
 - [ ] No TypeScript compilation errors in geminiChat.ts
@@ -222,19 +222,19 @@ grep -A 15 "convertServiceMessageToContent" /Users/acoliver/projects/claude-llxp
 - **Mock service issues:** Verify test mocks match IHistoryService interface exactly
 
 ### 2. Service Delegation Issues
-- **Service not called:** Check historyService integration flag initialization and service availability checks
+- **Service not called:** Check that HistoryService is provided in constructor
 - **Wrong parameters:** Debug extractContentForService and convertContentToServiceRole methods
 - **Conversion errors:** Fix convertServiceMessageToContent method implementation
 
-### 3. Array service delegation Problems
-- **service delegation not working:** Verify original logic preservation in else blocks
-- **Service disabled behavior changed:** Ensure no modification to original array manipulation code
-- **direct replacement broken:** Check constructor changes don't affect existing usage
+### 3. Mandatory Service Problems
+- **Optional patterns found:** Remove ALL optional/null/undefined patterns
+- **Array manipulation found:** Remove ALL array operations
+- **Constructor not requiring service:** Make HistoryService parameter mandatory
 
-### 4. service integration Issues
-- **Runtime switching fails:** Debug enableHistoryService and disableHistoryService methods
-- **History migration problems:** Fix migration logic in service control methods
-- **State inconsistency:** Verify historyService integration flag management is correct
+### 4. Breaking Change Issues
+- **Enable/disable methods found:** Remove these - service is always required
+- **Fallback logic found:** Remove all fallback patterns
+- **Optional service usage:** Make all service usage mandatory
 
 ### 5. TypeScript Compilation Errors
 - **Type incompatibility:** Fix interface mismatches between GeminiChat and IHistoryService
@@ -248,9 +248,9 @@ grep -A 15 "convertServiceMessageToContent" /Users/acoliver/projects/claude-llxp
 - [ ] All verification commands executed successfully
 - [ ] Phase 22 integration test suite passes completely
 - [ ] Service delegation behavior verified through manual testing
-- [ ] Array service delegation verified through manual testing  
-- [ ] service integration switching tested and working correctly
-- [ ] No array manipulation when service enabled (verified by code inspection)
+- [ ] NO array manipulation anywhere (verified by code inspection)  
+- [ ] NO enable/disable methods exist
+- [ ] HistoryService is REQUIRED everywhere
 - [ ] TypeScript compilation passes without warnings or errors
 - [ ] Code markers present and traceable to Phase 23 implementation
 - [ ] Service conversion helpers implemented and functional

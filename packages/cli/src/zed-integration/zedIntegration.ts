@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { Extension } from '../config/extension.js';
 import { CliArgs, loadCliConfig } from '../config/config.js';
+import { getProviderManager } from '../providers/providerManagerInstance.js';
 
 export async function runZedIntegration(
   config: Config,
@@ -120,16 +121,88 @@ class GeminiAgent {
     cwd,
     mcpServers,
   }: acp.NewSessionRequest): Promise<acp.NewSessionResponse> {
+    console.error('[ZED] Starting new session...');
+    console.error('[ZED] Working directory:', cwd);
+    console.error('[ZED] MCP servers:', mcpServers?.length ?? 0);
+
+    // Check for environment conflicts
+    const geminiPath = process.env.PATH?.split(':').find((p) =>
+      p.includes('gemini-cli'),
+    );
+    if (geminiPath) {
+      console.error(
+        '[ZED] Warning: Both gemini-cli and llxprt detected in PATH. This may cause conflicts.',
+      );
+    }
+
     const sessionId = randomUUID();
+    console.error('[ZED] Session ID:', sessionId);
+    console.error('[ZED] Creating session config...');
     const config = await this.newSessionConfig(sessionId, cwd, mcpServers);
+    console.error('[ZED] Session config created');
 
     let isAuthenticated = false;
-    if (this.settings.merged.selectedAuthType) {
+
+    // Check if a provider is configured (via profile or environment)
+    const providerManager = config.getProviderManager?.();
+    const configProvider = config.getProvider?.();
+
+    if (configProvider && providerManager?.hasActiveProvider?.()) {
+      // Provider is already configured, use USE_PROVIDER auth type
       try {
-        await config.refreshAuth(this.settings.merged.selectedAuthType);
+        const AUTH_TIMEOUT = 30000; // 30 seconds
+        const authPromise = config.refreshAuth(AuthType.USE_PROVIDER);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Authentication timeout')),
+            AUTH_TIMEOUT,
+          ),
+        );
+        await Promise.race([authPromise, timeoutPromise]);
+        isAuthenticated = true;
+        console.error('[ZED] Authenticated with provider:', configProvider);
+      } catch (e) {
+        console.error(`[ZED] Provider authentication failed: ${e}`);
+      }
+    } else if (this.settings.merged.selectedAuthType) {
+      // Fall back to legacy auth types for backward compatibility
+      try {
+        const AUTH_TIMEOUT = 30000; // 30 seconds
+        const authPromise = config.refreshAuth(
+          this.settings.merged.selectedAuthType,
+        );
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Authentication timeout')),
+            AUTH_TIMEOUT,
+          ),
+        );
+        await Promise.race([authPromise, timeoutPromise]);
         isAuthenticated = true;
       } catch (e) {
         console.error(`Authentication failed: ${e}`);
+      }
+    } else if (
+      process.env.OPENAI_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      process.env.LLXPRT_API_KEY
+    ) {
+      // Environment variables detected, use USE_PROVIDER
+      try {
+        const AUTH_TIMEOUT = 30000; // 30 seconds
+        const authPromise = config.refreshAuth(AuthType.USE_PROVIDER);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Authentication timeout')),
+            AUTH_TIMEOUT,
+          ),
+        );
+        await Promise.race([authPromise, timeoutPromise]);
+        isAuthenticated = true;
+        console.error('[ZED] Authenticated with provider from environment');
+      } catch (e) {
+        console.error(`[ZED] Environment auth failed: ${e}`);
       }
     }
 
@@ -174,6 +247,7 @@ class GeminiAgent {
 
     const settings = { ...this.settings.merged, mcpServers: mergedMcpServers };
 
+    console.error('[ZED] Loading CLI config...');
     const config = await loadCliConfig(
       settings,
       this.extensions,
@@ -182,7 +256,102 @@ class GeminiAgent {
       cwd,
     );
 
-    await config.initialize();
+    console.error('[ZED] Setting up provider manager...');
+    // Initialize provider manager with settings and config
+    const providerManager = getProviderManager(config, false, this.settings);
+    config.setProviderManager(providerManager);
+
+    // Set up server tools provider for Gemini compatibility
+    const geminiProvider = providerManager.getProviderByName('gemini');
+    if (geminiProvider) {
+      providerManager.setServerToolsProvider(geminiProvider);
+    }
+
+    // Determine which provider to activate based on configuration
+    let targetProvider = 'gemini'; // default
+
+    // Check for provider from argv, environment, or settings
+    if (this.argv.provider) {
+      targetProvider = this.argv.provider;
+    } else if (process.env.LLXPRT_DEFAULT_PROVIDER) {
+      targetProvider = process.env.LLXPRT_DEFAULT_PROVIDER;
+    }
+
+    // Activate the target provider
+    try {
+      providerManager.setActiveProvider(targetProvider);
+      console.error(`[ZED] Activated provider: ${targetProvider}`);
+    } catch (error) {
+      console.error(
+        `[ZED] Failed to activate provider ${targetProvider}, falling back to gemini:`,
+        error,
+      );
+      providerManager.setActiveProvider('gemini');
+    }
+
+    // Apply provider-specific settings from CLI args or environment
+    const activeProvider = providerManager.getActiveProvider();
+
+    // Apply API key if provided
+    if (this.argv.key && typeof activeProvider.setApiKey === 'function') {
+      activeProvider.setApiKey(this.argv.key);
+    } else if (
+      this.argv.keyfile &&
+      typeof activeProvider.setApiKey === 'function'
+    ) {
+      try {
+        const keyContent = await fs.readFile(this.argv.keyfile, 'utf-8');
+        activeProvider.setApiKey(keyContent.trim());
+      } catch (error) {
+        console.error(
+          `[ZED] Failed to read keyfile ${this.argv.keyfile}:`,
+          error,
+        );
+      }
+    }
+
+    // Apply base URL if provided
+    if (this.argv.baseurl && typeof activeProvider.setBaseUrl === 'function') {
+      activeProvider.setBaseUrl(this.argv.baseurl);
+    }
+
+    console.error('[ZED] Initializing config...');
+    const CONFIG_INIT_TIMEOUT = 15000; // 15 seconds
+    const initPromise = config.initialize();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Config initialization timeout')),
+        CONFIG_INIT_TIMEOUT,
+      ),
+    );
+
+    try {
+      await Promise.race([initPromise, timeoutPromise]);
+      console.error('[ZED] Config initialized successfully');
+    } catch (error) {
+      console.error('[ZED] Config initialization failed:', error);
+      throw error;
+    }
+
+    // Initialize content generator by calling refreshAuth with USE_PROVIDER
+    // This is required for GeminiClient.startChat() to work
+    console.error('[ZED] Initializing content generator...');
+    try {
+      const AUTH_TIMEOUT = 15000; // 15 seconds
+      const refreshPromise = config.refreshAuth(AuthType.USE_PROVIDER);
+      const refreshTimeoutPromise = new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Content generator initialization timeout')),
+          AUTH_TIMEOUT,
+        ),
+      );
+      await Promise.race([refreshPromise, refreshTimeoutPromise]);
+      console.error('[ZED] Content generator initialized successfully');
+    } catch (error) {
+      console.error('[ZED] Content generator initialization failed:', error);
+      throw error;
+    }
+
     return config;
   }
 

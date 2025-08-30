@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// MARKER: HS-041-TEST-PARAMS - Tests use Content[] parameters
+// MARKER: HS-041-TEST-CLEAN - Tests verify clean provider separation
+
 import { describe, it, expect, beforeAll } from 'vitest';
 import { OpenAIProvider } from './OpenAIProvider.js';
 import { IMessage } from '../IMessage.js';

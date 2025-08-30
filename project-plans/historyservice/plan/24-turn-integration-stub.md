@@ -19,7 +19,7 @@ Based on actual Turn.ts source code analysis:
 - **Line 253**: `handlePendingFunctionCall(fnCall)` method processes individual function calls
 - **Line 304**: `handlePendingFunctionCall` method creates ToolCallRequestInfo and adds to `pendingToolCalls` array
 - Uses GeminiEventType.ToolCallRequest events via TurnEmitter
-- CoreToolScheduler callback pattern maintained through event system
+- Event-driven pattern maintained through TurnEmitter system
 
 **Key Modification Point:**
 - **Target Method**: `handlePendingFunctionCall` (line 304-325), NOT `handleFunctionCalls`
@@ -223,8 +223,8 @@ import { ToolExecutionStatus } from '../historyservice/interfaces/ToolTypes.js';
 
 ### Preserving Existing Architecture
 
-**CoreToolScheduler Integration:**
-- No changes to CoreToolScheduler callbacks
+**Event System Integration:**
+- No changes to existing TurnEmitter event flow
 - Tool execution still handled by existing event system
 - HistoryService integration is additive, not replacement
 - Direct HistoryService integration (no intermediate ToolManager layer)
@@ -245,7 +245,6 @@ import { ToolExecutionStatus } from '../historyservice/interfaces/ToolTypes.js';
 - [ ] `handlePendingFunctionCall` integrates pending tool calls with HistoryService methods directly
 - [ ] Tool execution completion handlers created for response management via HistoryService
 - [ ] Tool status querying implemented via `getToolExecutionStatus()` from HistoryService
-- [ ] Existing CoreToolScheduler callback pattern preserved
 - [ ] TurnEmitter event system unchanged and functional
 - [ ] Service integration (`historyService integrationTools`) controls integration
 - [ ] TypeScript compilation passes without errors

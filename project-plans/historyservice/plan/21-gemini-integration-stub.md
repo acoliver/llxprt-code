@@ -12,7 +12,7 @@
 
 ## Phase Overview
 
-Create direct integration for GeminiChat.ts by modifying existing implementation at specific line numbers. This phase performs DIRECT REPLACEMENT of existing methods with HistoryService delegation - NO direct replacement shims. HistoryService is a required dependency.
+Create direct integration for GeminiChat.ts by modifying existing implementation at specific line numbers. This phase performs DIRECT REPLACEMENT of existing methods with HistoryService delegation. HistoryService is a REQUIRED dependency - NOT optional.
 
 ## Critical Implementation Points (from memo.md)
 
@@ -22,7 +22,7 @@ Create direct integration for GeminiChat.ts by modifying existing implementation
 - **Lines 232-276**: Replace extractCuratedHistory with HistoryService wrapper (45 lines)  
 - **Lines 1198-1253**: Replace shouldMergeToolResponses with HistoryService wrapper (56 lines)
 
-**Strategy**: Direct replacement with service delegation, no direct replacement.
+**Strategy**: Direct replacement making HistoryService mandatory, no fallback mode.
 
 ## Implementation Tasks
 
@@ -43,9 +43,12 @@ constructor(
   this.model = model;
   this.systemPrompt = systemPrompt;
   
-  // Direct service assignment - no service delegation
+  // HistoryService is REQUIRED - no optional usage
+  if (!historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
   this.historyService = historyService;
-  // Remove: this.history array - no longer needed
+  // NO array fallback - service handles everything
 }
 ```
 
@@ -53,8 +56,8 @@ constructor(
 
 ```typescript
 // @requirement HS-049: Add integration properties near line 306
-// Remove: private history: Content[] = []; // No longer needed
-private readonly historyService: IHistoryService; // Required service instance
+// NO array storage - HistoryService handles everything
+private readonly historyService: IHistoryService; // REQUIRED - not optional
 ```
 
 ### Task 3: Replace recordHistory (Lines 1034-1165) 
@@ -66,7 +69,11 @@ private readonly historyService: IHistoryService; // Required service instance
 
 private recordHistory(content: Content): void {
   // @marker HISTORYSERVICE_INTEGRATION_P21
-  // Direct service call - no service delegation needed
+  // HistoryService is REQUIRED - no fallback
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
+  
   const role = this.convertContentRole(content.role);
   const messageContent = this.extractContentText(content);
   const metadata = {
@@ -77,7 +84,7 @@ private recordHistory(content: Content): void {
   };
   
   this.historyService.addMessage(messageContent, role, metadata);
-  // No array manipulation - service handles all history
+  // NO array manipulation - service handles everything
 }
 ```
 
@@ -90,10 +97,14 @@ private recordHistory(content: Content): void {
 
 private extractCuratedHistory(): Content[] {
   // @marker HISTORYSERVICE_INTEGRATION_P21
-  // Direct service call - no service delegation needed
+  // HistoryService is REQUIRED - no fallback
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
+  
   const messages = this.historyService.getCuratedHistory();
   return messages.map(msg => this.convertMessageToContent(msg));
-  // No array filtering - service handles curation
+  // NO array filtering - service handles everything
 }
 ```
 
@@ -106,7 +117,11 @@ private extractCuratedHistory(): Content[] {
 
 private shouldMergeToolResponses(newContent: Content): boolean {
   // @marker HISTORYSERVICE_INTEGRATION_P21
-  // Direct service call - no service delegation needed
+  // HistoryService is REQUIRED - no fallback
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
+  
   const lastMessage = this.historyService.getLastMessage();
   if (!lastMessage) return false;
   
@@ -114,7 +129,7 @@ private shouldMergeToolResponses(newContent: Content): boolean {
     this.convertContentToMessage(newContent),
     lastMessage
   );
-  // No array-based logic - service handles tool merging
+  // NO array-based logic - service handles everything
 }
 ```
 
@@ -181,11 +196,15 @@ private getContentType(content: Content): string {
 ```typescript
 // @requirement HS-049: Service integration verification
 public getHistoryService(): IHistoryService {
+  if (!this.historyService) {
+    throw new Error('HistoryService is required but not provided');
+  }
   return this.historyService;
 }
 
+// HistoryService is ALWAYS integrated (required dependency)
 public isServiceIntegrated(): boolean {
-  return this.historyService !== undefined;
+  return true; // Always true - service is mandatory
 }
 ```
 

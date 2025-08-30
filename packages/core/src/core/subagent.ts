@@ -19,6 +19,8 @@ import {
   Type,
 } from '@google/genai';
 import { GeminiChat } from './geminiChat.js';
+import { HistoryService } from '../services/history/index.js';
+import { MessageRole } from '../services/history/types.js';
 
 /**
  * @fileoverview Defines the configuration interfaces for a subagent.
@@ -564,6 +566,42 @@ export class SubAgentScope {
 
     const start_history = [...(this.promptConfig.initialMessages ?? [])];
 
+    // Create a new HistoryService instance for this subagent
+    const conversationId = `subagent_${Date.now()}`;
+    const historyService = new HistoryService(conversationId);
+
+    // If we have initial messages, add them to the service
+    if (start_history.length > 0) {
+      for (const content of start_history) {
+        const role =
+          content.role?.toLowerCase() === 'model'
+            ? 'model'
+            : content.role?.toLowerCase() === 'user'
+              ? 'user'
+              : content.role?.toLowerCase() === 'system'
+                ? 'system'
+                : content.role?.toLowerCase() === 'tool'
+                  ? 'tool'
+                  : 'user';
+        const messageContent = content.parts
+          ? content.parts
+              .map((p) => p.text || '')
+              .filter((t) => t)
+              .join(' ') || JSON.stringify(content)
+          : JSON.stringify(content);
+        const metadata = {
+          timestamp: Date.now(),
+          source: 'subagent',
+          originalContent: content,
+        };
+        historyService.addMessage(
+          messageContent,
+          role as MessageRole,
+          metadata,
+        );
+      }
+    }
+
     // Build system instruction with environment context
     let systemInstruction = this.promptConfig.systemPrompt
       ? this.buildChatSystemPrompt(context)
@@ -607,7 +645,7 @@ export class SubAgentScope {
         this.runtimeContext,
         contentGenerator,
         generationConfig,
-        start_history,
+        historyService,
       );
     } catch (error) {
       await reportError(

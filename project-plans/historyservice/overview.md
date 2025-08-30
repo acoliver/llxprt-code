@@ -26,7 +26,7 @@ A centralized service that owns and manages all conversation history with atomic
 2. **Atomic Operations** - Tool calls and responses are added together or not at all
 3. **Provider Agnostic** - History structure is independent of provider requirements
 4. **Validation Built-in** - Invalid states are prevented, not detected after the fact
-5. **Observable** - All changes emit events for debugging and UI updates
+5. **Debuggable** - All changes are logged with context for debugging
 
 ### Key Features
 
@@ -57,14 +57,8 @@ Tracks conversation state to prevent invalid operations:
 - Content validation (no empty messages, valid tool IDs)
 - Pure functions that don't know about specific providers
 
-#### Event System
-```typescript
-interface HistoryEvents {
-  change: { type: 'add' | 'pop' | 'clear', entries: Content[] };
-  turnComplete: { userMessage: Content, modelResponse: Content };
-  toolTurnComplete: { calls: ToolCall[], responses: ToolResponse[] };
-}
-```
+#### ~~Event System~~ [REMOVED - UNNECESSARY]
+~~The event system was removed as it was overengineering for imaginary requirements. No production code ever used the events - only tests subscribed to them. Orphan tool prevention works perfectly through direct validation without needing events. See `EVENTS-WERE-UNNECESSARY.md` for details.~~
 
 ## Integration Points
 

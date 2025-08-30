@@ -78,6 +78,9 @@ export * from './ide/constants.js';
 // Export Shell Execution Service
 export * from './services/shellExecutionService.js';
 
+// Export history services
+export * from './services/history/index.js';
+
 // Export base tool definitions
 export * from './tools/tools.js';
 export * from './tools/tool-error.js';

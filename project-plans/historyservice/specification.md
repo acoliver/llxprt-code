@@ -429,7 +429,7 @@ export interface EventPayload {
    - **Mitigation**: 
      - Extensive testing with each provider
      - Configuration options for provider-specific behavior
-     - Gradual migration with fallback options
+     - Direct migration with mandatory HistoryService
 
 2. **Tool Execution Timing Issues**
    - **Risk**: Async history updates could cause race conditions

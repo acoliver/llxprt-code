@@ -291,10 +291,8 @@ export function buildResponsesRequest(
   } else if (store !== undefined) {
     // Use the store flag if explicitly provided
     request.store = store;
-  } else {
-    // Default to storing (stateful mode)
-    request.store = true;
   }
+  // Note: Do not set store by default - only set when parentId is present or explicitly provided
 
   // Add tools if provided
   if (tools && tools.length > 0) {

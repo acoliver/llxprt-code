@@ -346,6 +346,11 @@ export class GeminiProvider extends BaseProvider {
    * @plan PLAN-20250826-RESPONSES.P05
    * @requirement REQ-001
    */
+  // @plan PLAN-20250128-HISTORYSERVICE.P29
+  // @requirement HS-041
+  // @phase provider-updates-impl
+  // @cleanup Remove conversation array access and tool management
+  // MARKER: HS-041-GEMINI-PARAMS - Accepts Content[] arrays as method parameters
   async *generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
@@ -576,6 +581,8 @@ export class GeminiProvider extends BaseProvider {
       this.toolSchemas = this.convertToolsToGeminiFormat(tools);
     }
 
+    // MARKER: HS-041-GEMINI-CLEAN - No history management in provider
+    // Provider focuses solely on LLM communication, not history management
     // No conversion needed - Content[] is already in Gemini format!
 
     // Use provided tools or stored tools

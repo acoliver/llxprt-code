@@ -52,7 +52,7 @@ grep -n "private history.*Content\[\]" /Users/acoliver/projects/claude-llxprt/ll
 **Success Criteria:**
 - `private historyService: IHistoryService` property added (REQUIRED, not optional)
 - NO fallback mode - HistoryService is mandatory
-- Direct replacement only - no dual mode
+- Direct replacement only - no optional usage
 
 ### 3. RecordHistory Replacement (Lines 1034-1165)
 **Target:** Original recordHistory method replaced with service wrapper
@@ -89,9 +89,9 @@ grep -A 20 "extractCuratedHistory" /Users/acoliver/projects/claude-llxprt/llxprt
 ```
 
 **Success Criteria:**
-- ExtractCuratedHistory method uses `historyService.getCuratedHistory()` when enabled
+- ExtractCuratedHistory method ALWAYS uses `historyService.getCuratedHistory()`
 - Includes message-to-content conversion via `convertMessageToContent()`
-- uses direct service for original array-based filtering when service disabled
+- NO array fallback - HistoryService is REQUIRED
 - Maintains same return type `Content[]`
 
 ### 5. ShouldMergeToolResponses Replacement (Lines 1198-1253)
@@ -111,23 +111,23 @@ grep -A 25 "shouldMergeToolResponses" /Users/acoliver/projects/claude-llxprt/llx
 - Replaces original merging logic entirely
 - Return type and behavior consistent with original method
 
-### 6. Direct Service Integration
-**Target:** Direct service method calls without flags
+### 6. Mandatory Service Verification
+**Target:** HistoryService is REQUIRED everywhere
 
 **Verification Commands:**
 ```bash
-# Check enableHistoryService method exists
-grep -A 10 "enableHistoryService" /Users/acoliver/projects/claude-llxprt/llxprt-code/packages/core/src/core/geminiChat.ts
+# Verify NO enable/disable methods exist
+grep "enableHistoryService\|disableHistoryService" /Users/acoliver/projects/claude-llxprt/llxprt-code/packages/core/src/core/geminiChat.ts && echo "❌ Found enable/disable methods" || echo "✓ No enable/disable methods"
 
-# Check disableHistoryService method exists  
-grep -A 5 "disableHistoryService" /Users/acoliver/projects/claude-llxprt/llxprt-code/packages/core/src/core/geminiChat.ts
+# Check that service is required in constructor  
+grep -A 10 "constructor(" /Users/acoliver/projects/claude-llxprt/llxprt-code/packages/core/src/core/geminiChat.ts | grep "historyService:.*HistoryService[^?]"
 ```
 
 **Success Criteria:**
-- `enableHistoryService(historyService: IHistoryService)` method exists
-- `disableHistoryService()` method exists
-- Methods properly toggle `historyService integration` flag
-- EnableHistoryService accepts IHistoryService parameter
+- NO enable/disable methods exist
+- HistoryService is REQUIRED in constructor
+- No optional service patterns anywhere
+- Service is always active
 
 ### 7. NO direct replacement Shims
 **Target:** Verify no unnecessary compatibility layers exist
@@ -191,8 +191,8 @@ grep -A 10 "extractCuratedHistory" src/core/geminiChat.ts | grep -E "(getCurated
 echo "5. ShouldMergeToolResponses Integration:"
 grep -A 10 "shouldMergeToolResponses" src/core/geminiChat.ts | grep "historyService integration" || echo "❌ ShouldMergeToolResponses not integrated"
 
-echo "6. Control Methods:"
-grep -n "enableHistoryService\|disableHistoryService" src/core/geminiChat.ts || echo "❌ Missing control methods"
+echo "6. Mandatory Service Check:"
+grep "enableHistoryService\|disableHistoryService" src/core/geminiChat.ts && echo "❌ Found enable/disable methods" || echo "✓ No enable/disable methods (service is mandatory)"
 
 echo "7. TypeScript Compilation:"
 npx tsc --noEmit src/core/geminiChat.ts && echo "✓ TypeScript compilation passes" || echo "❌ TypeScript errors detected"
@@ -211,7 +211,7 @@ echo "=== Verification Complete ==="
 - [ ] RecordHistory method replaced with service wrapper (lines 1034-1165 range)
 - [ ] ExtractCuratedHistory method replaced with service wrapper (lines 232-276 range) 
 - [ ] ShouldMergeToolResponses method replaced with service wrapper (lines 1198-1253 range)
-- [ ] Direct service integration without service integrations
+- [ ] HistoryService is REQUIRED everywhere (no optional usage)
 - [ ] NO direct replacement shims exist (clean integration)
 - [ ] TypeScript compilation passes without errors
 - [ ] All required imports present
@@ -225,7 +225,7 @@ echo "=== Verification Complete ==="
 2. **Missing Properties:** Add required private properties with correct types
 3. **Integration Problems:** Review wrapper method implementations for proper service delegation
 4. **Compilation Errors:** Fix import statements and type annotations
-5. **Service Integration:** Ensure service methods are called directly
+5. **Optional Patterns Found:** Remove ALL optional/fallback logic - service is REQUIRED
 
 **Rollback Strategy:**
 - If major issues detected, revert to pre-Phase 21 state

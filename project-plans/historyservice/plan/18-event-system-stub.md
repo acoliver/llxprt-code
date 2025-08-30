@@ -1,12 +1,22 @@
-# Phase 18: Event System Stub
+# DEPRECATED - UNNECESSARY HALLUCINATION
+
+## THIS PHASE WAS REMOVED - EVENTS WERE NEVER NEEDED
+
+The event system was completely unnecessary overengineering for imaginary future requirements that never materialized. NO production code uses the events - only tests subscribe to them. Orphan tool prevention works perfectly through direct validation in `commitToolResponses()` without needing any events.
+
+See `EVENTS-WERE-UNNECESSARY.md` for full explanation.
+
+---
+
+# ~~Phase 18: Event System Stub~~ [DEPRECATED]
 
 **Phase ID**: PLAN-20250128-HISTORYSERVICE.P18  
 **Prerequisites**: Phase 17a (tool management implementation verification) passed  
-**Requirements**: HS-026 to HS-029 (Event System)  
+**Requirements**: ~~HS-026 to HS-029 (Event System)~~ **[REMOVED - HALLUCINATED REQUIREMENTS]**
 
-## Overview
+## ~~Overview~~ [DEPRECATED]
 
-This phase implements stub infrastructure for the event system in HistoryService. The event system will enable external components to subscribe to and react to history modifications, turn completions, and tool executions. This stub phase lays the foundation for comprehensive event handling that will be fully implemented in subsequent phases.
+~~This phase implements stub infrastructure for the event system in HistoryService.~~ **[REMOVED: Events were unnecessary complexity]** The event system will enable external components to subscribe to and react to history modifications, turn completions, and tool executions. This stub phase lays the foundation for comprehensive event handling that will be fully implemented in subsequent phases.
 
 ## Requirements Coverage
 

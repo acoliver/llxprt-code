@@ -1,3 +1,5 @@
+// MARKER: HS-041-TEST-PARAMS - Tests use Content[] parameters
+// MARKER: HS-041-TEST-CLEAN - Tests verify clean provider separation
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { AnthropicProvider } from './AnthropicProvider.js';
 import { ITool } from '../ITool.js';

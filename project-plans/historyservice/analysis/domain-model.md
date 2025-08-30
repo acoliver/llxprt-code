@@ -417,10 +417,10 @@ const history = await this.historyService.getCuratedHistory();
    - Maintain conversation continuity
    - No format changes required
 
-2. Incremental migration possible (HS-054)
-   - Can migrate component by component
-   - No big-bang deployment required
-   - Graceful fallback during migration
+2. Direct migration required (HS-054)
+   - HistoryService is mandatory for all components
+   - Breaking change enforced
+   - No fallback mode - service is required
 
 3. Maintain all public APIs (HS-055)
    - GeminiChat public interface unchanged

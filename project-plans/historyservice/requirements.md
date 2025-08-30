@@ -62,15 +62,17 @@
 
 **HS-025** The HistoryService SHALL preserve tool responses in history even when the model returns an empty response.
 
-### Event System
+### ~~Event System~~ [REMOVED - UNNECESSARY HALLUCINATION]
 
-**HS-026** The HistoryService SHALL emit events when history is modified (add, remove, clear).
+**~~HS-026~~** ~~The HistoryService SHALL emit events when history is modified (add, remove, clear).~~ **[REMOVED: No production code uses events]**
 
-**HS-027** The HistoryService SHALL emit events when a conversation turn is completed.
+**~~HS-027~~** ~~The HistoryService SHALL emit events when a conversation turn is completed.~~ **[REMOVED: No production code uses events]**
 
-**HS-028** The HistoryService SHALL emit events when tool calls and responses are committed.
+**~~HS-028~~** ~~The HistoryService SHALL emit events when tool calls and responses are committed.~~ **[REMOVED: No production code uses events]**
 
-**HS-029** The HistoryService SHALL allow external components to subscribe to history events.
+**~~HS-029~~** ~~The HistoryService SHALL allow external components to subscribe to history events.~~ **[REMOVED: No production code ever subscribed]**
+
+**Note:** The event system was removed as it was overengineering for imaginary requirements. Orphan tool prevention works perfectly through direct validation in `commitToolResponses()`. See `EVENTS-WERE-UNNECESSARY.md` for details.
 
 ### Compression Support
 

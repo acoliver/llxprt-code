@@ -14,7 +14,7 @@
 
 ## Verification Overview
 
-This phase validates that the GeminiChat-HistoryService integration TDD implementation from Phase 22 meets all requirements. The verification focuses on ensuring tests cover all integration points, reference the correct requirement, are integration-focused rather than isolation-focused, fail naturally with stub implementation, and test both service-enabled and disabled modes.
+This phase validates that the GeminiChat-HistoryService integration TDD implementation from Phase 22 meets all requirements. The verification focuses on ensuring tests cover all integration points, reference the correct requirement, are integration-focused rather than isolation-focused, fail naturally with stub implementation, and validate that HistoryService is always REQUIRED.
 
 **Critical:** All tests must demonstrate INTEGRATION behavior testing, not unit testing in isolation.
 
@@ -55,8 +55,8 @@ grep -q "extractCuratedHistory integration" src/core/__tests__/geminiChat.histor
 echo "Checking for ShouldMergeToolResponses integration tests:"
 grep -q "shouldMergeToolResponses integration" src/core/__tests__/geminiChat.historyservice.test.ts && echo "✓ Found" || echo "❌ Missing"
 
-echo "Checking for service integration switching tests:"
-grep -q "service integration switching" src/core/__tests__/geminiChat.historyservice.test.ts && echo "✓ Found" || echo "❌ Missing"
+echo "Checking for HistoryService requirement tests:"
+grep -q "HistoryService requirement" src/core/__tests__/geminiChat.historyservice.test.ts && echo "✓ Found" || echo "❌ Missing"
 
 echo "Checking for End-to-end workflow tests:"
 grep -q "complete conversation workflows" src/core/__tests__/geminiChat.historyservice.test.ts && echo "✓ Found" || echo "❌ Missing"
@@ -66,7 +66,7 @@ grep -q "complete conversation workflows" src/core/__tests__/geminiChat.historys
 - RecordHistory integration tests present
 - ExtractCuratedHistory integration tests present  
 - ShouldMergeToolResponses integration tests present
-- service integration switching tests present
+- HistoryService requirement validation tests present
 - End-to-end workflow tests present
 
 ### Task 3: Integration vs Isolation Focus Verification
@@ -96,31 +96,31 @@ grep -c "verify.*result\|ensure.*behavior\|check.*state" src/core/__tests__/gemi
 - At least 3 end-to-end workflow patterns found
 - At least 5 integration result verifications found
 
-### Task 4: Service-Enabled vs Service-Disabled Mode Testing
+### Task 4: HistoryService Requirement Validation Testing
 
 **Verification Commands:**
 ```bash
-# Check for service-enabled test scenarios
-echo "Checking for service-enabled tests:"
-grep -c "when enabled\|service enabled\|historyService active" src/core/__tests__/geminiChat.historyservice.test.ts
+# Check for HistoryService requirement tests
+echo "Checking for HistoryService requirement tests:"
+grep -c "required\|REQUIRED\|mandatory\|not optional" src/core/__tests__/geminiChat.historyservice.test.ts
 
-# Check for service-disabled/service delegation test scenarios  
-echo "Checking for service-disabled tests:"
-grep -c "when disabled\|service disabled\|falls back\|service delegation" src/core/__tests__/geminiChat.historyservice.test.ts
+# Verify no optional service patterns  
+echo "Checking for NO optional service patterns:"
+grep -c "when disabled\|service disabled\|falls back\|optional" src/core/__tests__/geminiChat.historyservice.test.ts
 
-# Verify service integration switching tests
-echo "Checking for runtime switching tests:"
-grep -c "enableHistoryService\|disableHistoryService\|runtime switch" src/core/__tests__/geminiChat.historyservice.test.ts
+# Verify constructor requirement tests
+echo "Checking for constructor requirement tests:"
+grep -c "constructor.*HistoryService\|requires.*HistoryService" src/core/__tests__/geminiChat.historyservice.test.ts
 
-# Check for error handling and direct service tests
+# Check for error handling tests
 echo "Checking for error handling tests:"
-grep -c "service errors\|gracefully\|service delegation.*error\|handles.*errors" src/core/__tests__/geminiChat.historyservice.test.ts
+grep -c "service errors\|gracefully\|handles.*errors" src/core/__tests__/geminiChat.historyservice.test.ts
 ```
 
 **Success Criteria:**
-- At least 5 service-enabled test scenarios
-- At least 5 service-disabled/service delegation test scenarios  
-- At least 2 runtime switching test scenarios
+- At least 5 tests validating HistoryService is required
+- ZERO references to optional/disabled service modes  
+- At least 2 constructor requirement test scenarios
 - At least 3 error handling test scenarios
 
 ### Task 5: Test Execution and Failure Behavior Verification
@@ -179,7 +179,7 @@ grep -c "preserves.*behavior\|maintains.*functionality\|original.*logic" src/cor
 - [ ] ✅ All 5 integration point categories have tests  
 - [ ] ✅ Tests demonstrate integration focus (not isolation)
 - [ ] ✅ Real conversation data is used throughout tests
-- [ ] ✅ Both service-enabled and service-disabled modes are tested
+- [ ] ✅ HistoryService is validated as REQUIRED (not optional)
 - [ ] ✅ Tests initially FAIL with stub implementation
 - [ ] ✅ HS-049 requirement is properly referenced and validated
 - [ ] ✅ TypeScript compilation passes
@@ -191,10 +191,10 @@ grep -c "preserves.*behavior\|maintains.*functionality\|original.*logic" src/cor
 
 1. **Missing Test Categories:** Return to Phase 22, add missing integration test suites
 2. **Isolation Focus Detected:** Rewrite tests to focus on end-to-end integration behavior
-3. **Missing Service Mode Coverage:** Add tests for both enabled/disabled service modes
+3. **Optional Service Patterns Found:** Remove ALL optional/fallback logic - HistoryService is REQUIRED
 4. **Tests Pass with Stubs:** Rewrite tests to verify actual implementation behavior
 5. **TypeScript Errors:** Fix type issues in test file and ensure proper imports
-6. **Requirement Gaps:** Add explicit HS-049 validation and direct replacement tests
+6. **Requirement Gaps:** Add explicit HS-049 validation tests
 
 ## Next Phase Dependencies
 
@@ -205,6 +205,6 @@ grep -c "preserves.*behavior\|maintains.*functionality\|original.*logic" src/cor
 
 **Blocking Issues:**
 - Integration tests not covering actual behavior (only testing mocks)
-- Missing service-enabled/disabled mode coverage  
+- Tests implying HistoryService is optional (it's REQUIRED)  
 - Tests passing with stub implementations (indicating they don't test real behavior)
 - TypeScript compilation errors preventing test execution

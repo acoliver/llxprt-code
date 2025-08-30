@@ -49,13 +49,15 @@ Each phase follows the strict 3-phase TDD cycle:
 - **Phase 17**: Tool Management Implementation (HistoryService Methods) (NEED TO CREATE)
 - **Phase 17a**: Tool Management Implementation Verification (NEED TO CREATE)
 
-### Event System (Requirements HS-026 to HS-029)
-- **Phase 18**: Event System Stub (NEED TO CREATE)
-- **Phase 18a**: Event System Stub Verification (NEED TO CREATE)
-- **Phase 19**: Event System TDD (NEED TO CREATE)
-- **Phase 19a**: Event System TDD Verification (NEED TO CREATE)
-- **Phase 20**: Event System Implementation (NEED TO CREATE)
-- **Phase 20a**: Event System Implementation Verification (NEED TO CREATE)
+### ~~Event System~~ [REMOVED - UNNECESSARY HALLUCINATION] (Requirements ~~HS-026 to HS-029~~ REMOVED)
+- **~~Phase 18~~**: ~~Event System Stub~~ **[DEPRECATED - Events were unnecessary]**
+- **~~Phase 18a~~**: ~~Event System Stub Verification~~ **[DEPRECATED - Events were unnecessary]**
+- **~~Phase 19~~**: ~~Event System TDD~~ **[DEPRECATED - Events were unnecessary]**
+- **~~Phase 19a~~**: ~~Event System TDD Verification~~ **[DEPRECATED - Events were unnecessary]**
+- **~~Phase 20~~**: ~~Event System Implementation~~ **[DEPRECATED - Events were unnecessary]**
+- **~~Phase 20a~~**: ~~Event System Implementation Verification~~ **[DEPRECATED - Events were unnecessary]**
+
+**Note:** The event system was removed as it was overengineering for imaginary requirements. NO production code uses events. Orphan tool prevention works through direct validation. See `EVENTS-WERE-UNNECESSARY.md`.
 
 ### ✅ GeminiChat Integration (Requirements HS-049)
 - **Phase 21**: GeminiChat Integration Stub ✅
@@ -137,7 +139,7 @@ To complete the essential structure, create these phases next:
 2. **Phase 08**: History Operations TDD & Implementation
 3. **Phase 08a**: History Operations Verification
 4. **Phase 15-17**: Tool Management (Stub, TDD, Implementation) + verifications
-5. **Phase 18-20**: Event System (Stub, TDD, Implementation) + verifications
+5. ~~**Phase 18-20**: Event System (Stub, TDD, Implementation) + verifications~~ **[REMOVED - Events were unnecessary]**
 6. **All Integration Verification phases**: 09a, 21a, 24a, 30a, 32a
 
 ## Phase Dependencies
@@ -147,7 +149,7 @@ To complete the essential structure, create these phases next:
                                                           ↓
 09 → 09a → 10 → 10a → 11 → 11a → 12 → 12a → 13 → 13a → 14 → 14a
                                                           ↓
-15 → 15a → 16 → 16a → 17 → 17a → 18 → 18a → 19 → 19a → 20 → 20a
+15 → 15a → 16 → 16a → 17 → 17a → ~~18 → 18a → 19 → 19a → 20 → 20a~~ [REMOVED]
                                                           ↓
 21 → 21a → 22 → 22a → 23 → 23a → 24 → 24a → 25 → 25a → 26 → 26a
                                                           ↓

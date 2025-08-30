@@ -1,13 +1,41 @@
-# Phase 19: Event System TDD
+# DEPRECATED - UNNECESSARY HALLUCINATION
+
+## THIS PHASE WAS REMOVED - EVENTS WERE NEVER NEEDED
+
+The event system was completely unnecessary overengineering for imaginary future requirements that never materialized. NO production code uses the events - only tests subscribe to them. Orphan tool prevention works perfectly through direct validation in `commitToolResponses()` without needing any events.
+
+See `EVENTS-WERE-UNNECESSARY.md` for full explanation.
+
+---
+
+# ~~Phase 19: Event System TDD~~ [DEPRECATED]
 
 ## Phase Information
 - **Phase ID**: PLAN-20250128-HISTORYSERVICE.P19
-- **Prerequisites**: Phase 18a (Event System - Base) must pass
-- **Type**: Test-Driven Development
-- **Requirements Coverage**: HS-026 to HS-029
+- **Prerequisites**: ~~Phase 18a (Event System - Base) must pass~~ **[N/A - PHASE REMOVED]**
+- **Type**: ~~Test-Driven Development~~ **[DEPRECATED]**
+- **Requirements Coverage**: ~~HS-026 to HS-029~~ **[REMOVED - HALLUCINATED REQUIREMENTS]**
 
-## Overview
-Create comprehensive behavioral tests for the event system before implementation. Tests must validate real behavior with actual event data and cover edge cases for production readiness.
+## ~~Overview~~ [DEPRECATED]
+~~Create comprehensive behavioral tests for the SIMPLIFIED event system.~~ **[REMOVED: Events were unnecessary complexity]** The event system uses a single, consistent API with clear event names and no unnecessary complexity.
+
+## CRITICAL: Event System Design
+**ONE WAY TO ACCESS EVENTS**: All event methods are directly on HistoryService:
+- `historyService.on(eventName, listener)` - Subscribe to events
+- `historyService.off(eventName, listener)` - Unsubscribe from events
+- `historyService.once(eventName, listener)` - One-time subscription
+
+**ONE SET OF EVENT NAMES**: Use simple, descriptive event names:
+- `'message:added'` - When a message is added
+- `'message:updated'` - When a message is updated  
+- `'message:deleted'` - When a message is deleted
+- `'history:cleared'` - When history is cleared
+- `'state:changed'` - When state transitions
+- `'tool:completed'` - When tool execution completes
+
+**NO SEPARATE EventManager CLASS**: Events are built directly into HistoryService.
+**NO DUPLICATE EVENT TYPES**: Just the simple string names above.
+**NO COMPLEX EVENT RECORDS**: Event data is passed directly as simple objects.
 
 ## Requirements Mapping
 - **HS-026**: Event emission on history modifications (add, remove, clear)
@@ -21,8 +49,9 @@ Create comprehensive behavioral tests for the event system before implementation
 **File**: `src/__tests__/history-events.test.ts`
 
 Create behavioral tests for:
-- Event emission when entries are added to history
-- Event emission when entries are removed from history
+- Event emission when messages are added to history
+- Event emission when messages are updated
+- Event emission when messages are removed from history
 - Event emission when history is cleared
 - Event data structure validation
 - Multiple listener handling
@@ -30,83 +59,153 @@ Create behavioral tests for:
 
 **Test Cases**:
 ```typescript
-// Add entry events
-- "should emit 'entryAdded' event when adding single entry"
-- "should emit 'entryAdded' event when adding multiple entries"
-- "should include correct entry data in event payload"
+// Add message events
+- "should emit 'message:added' event when adding single message"
+- "should emit 'message:added' event when adding multiple messages"
+- "should include correct message data in event payload"
 - "should emit events in correct order for batch operations"
 
-// Remove entry events  
-- "should emit 'entryRemoved' event when removing single entry"
-- "should emit 'entryRemoved' event when removing multiple entries"
-- "should include removed entry data in event payload"
+// Update message events
+- "should emit 'message:updated' event when updating a message"
+- "should include both old and new message in update event"
+
+// Remove message events  
+- "should emit 'message:deleted' event when removing single message"
+- "should emit 'message:deleted' event when removing multiple messages"
+- "should include removed message data in event payload"
 
 // Clear history events
-- "should emit 'historyCleared' event when clearing all entries"
-- "should include previous entry count in clear event payload"
+- "should emit 'history:cleared' event when clearing all messages"
+- "should include previous message count in clear event payload"
 
 // Multiple listeners
 - "should notify all registered listeners for history events"
 - "should handle listener removal during event emission"
 ```
 
-### Task 2: Turn Completion Event Tests (HS-027)
-**File**: `src/__tests__/turn-completion-events.test.ts`
-
-Create behavioral tests for:
-- Turn completion event emission
-- Event payload validation (turn data, metrics, timing)
-- Integration with history service state
-- Error handling during turn completion
-
-**Test Cases**:
+**Event API Usage in Tests**:
 ```typescript
-- "should emit 'turnCompleted' event when turn is finished"
-- "should include turn metadata in event payload"
-- "should include performance metrics in event payload"
-- "should include timing information in event payload"
-- "should emit event after history state is updated"
-- "should handle turn completion with errors gracefully"
+// CORRECT way to subscribe to events in tests:
+const listener = vi.fn();
+historyService.on('message:added', listener);
+
+// CORRECT way to unsubscribe:
+historyService.off('message:added', listener);
+
+// Event payload structure for message:added:
+{
+  message: Message // The complete message object
+}
+
+// Event payload structure for message:updated:
+{
+  oldMessage: Message,
+  newMessage: Message
+}
+
+// Event payload structure for message:deleted:
+{
+  message: Message
+}
+
+// Event payload structure for history:cleared:
+{
+  count: number // Number of messages cleared
+}
 ```
 
-### Task 3: Tool Commit Event Tests (HS-028)
-**File**: `src/__tests__/tool-commit-events.test.ts`
+### Task 2: State Change Event Tests (HS-027)
+**File**: `src/__tests__/state-change-events.test.ts`
 
 Create behavioral tests for:
-- Tool commit event emission
-- Event payload with tool execution data
-- Batch tool commit handling
-- Integration with turn lifecycle
+- State transition event emission
+- Event payload validation (from/to states)
+- Integration with history service operations
+- State history tracking
 
 **Test Cases**:
 ```typescript
-- "should emit 'toolCommitted' event when tool execution completes"
-- "should include tool execution results in event payload"
-- "should include tool metadata (name, duration, status) in event"
-- "should emit events for batch tool commits"
-- "should maintain event order for sequential tool commits"
+- "should emit 'state:changed' event when state transitions"
+- "should include from and to states in event payload"
+- "should emit state change when adding model messages"
+- "should emit state change when executing tools"
+- "should track state history correctly"
+- "should handle invalid state transitions gracefully"
+```
+
+**Event API Usage**:
+```typescript
+// Event payload structure for state:changed:
+{
+  fromState: HistoryState,
+  toState: HistoryState,
+  context?: string // Optional context about why the transition occurred
+}
+```
+
+### Task 3: Tool Completion Event Tests (HS-028)
+**File**: `src/__tests__/tool-completion-events.test.ts`
+
+Create behavioral tests for:
+- Tool completion event emission
+- Event payload with tool execution data
+- Batch tool completion handling
+- Integration with tool management
+
+**Test Cases**:
+```typescript
+- "should emit 'tool:completed' event when tool execution completes"
+- "should include tool call and response in event payload"
+- "should emit events for batch tool completions"
+- "should maintain event order for sequential tool completions"
 - "should handle tool execution failures in events"
+```
+
+**Event API Usage**:
+```typescript
+// Event payload structure for tool:completed:
+{
+  toolCall: ToolCall,
+  toolResponse: ToolResponse
+}
 ```
 
 ### Task 4: Event Subscription Management Tests (HS-029)
 **File**: `src/__tests__/event-subscription.test.ts`
 
 Create behavioral tests for:
-- Event listener registration/unregistration
+- Event listener registration/unregistration using `on()` and `off()`
+- One-time listeners using `once()`
 - Listener lifecycle management
 - Memory leak prevention
 - Error handling in listeners
 
 **Test Cases**:
 ```typescript
-- "should register event listeners successfully"
-- "should unregister event listeners successfully"
+- "should register event listeners with on() successfully"
+- "should unregister event listeners with off() successfully"
 - "should prevent memory leaks from orphaned listeners"
 - "should handle errors in event listeners gracefully"
 - "should support multiple listeners for same event type"
 - "should allow listener removal during event emission"
 - "should validate listener function types"
-- "should support once-only event listeners"
+- "should support once() for one-time event listeners"
+```
+
+**API Usage Examples**:
+```typescript
+// Register a listener
+historyService.on('message:added', myListener);
+
+// Remove a listener
+historyService.off('message:added', myListener);
+
+// One-time listener
+historyService.once('history:cleared', oneTimeListener);
+
+// Multiple listeners for same event
+historyService.on('state:changed', listener1);
+historyService.on('state:changed', listener2);
 ```
 
 ### Task 5: Event System Integration Tests
@@ -115,7 +214,7 @@ Create behavioral tests for:
 Create behavioral tests for:
 - End-to-end event flow scenarios
 - Event system performance under load
-- Cross-component event interactions
+- Cross-operation event sequences
 - Error propagation and recovery
 
 **Test Cases**:
@@ -124,7 +223,22 @@ Create behavioral tests for:
 - "should maintain event order across multiple operations"
 - "should handle high-frequency event emissions"
 - "should recover from listener errors without breaking system"
-- "should support event filtering and conditional emission"
+- "should emit correct sequence: message:added -> state:changed -> tool:completed"
+```
+
+**Complete Event Flow Example**:
+```typescript
+const events: string[] = [];
+historyService.on('message:added', () => events.push('message:added'));
+historyService.on('state:changed', () => events.push('state:changed'));
+historyService.on('tool:completed', () => events.push('tool:completed'));
+
+// Operations trigger events in correct order
+historyService.addMessage('test', 'user');
+// Expect: ['message:added']
+
+historyService.transitionTo(HistoryState.TOOLS_EXECUTING);
+// Expect: ['message:added', 'state:changed']
 ```
 
 ## Implementation Requirements
@@ -135,15 +249,16 @@ All tests must:
 - Include `beforeEach`/`afterEach` for test isolation
 - Mock external dependencies appropriately
 - Validate actual event data structures
-- NOT expect `NotYetImplemented` errors
+- Use the DIRECT event API on HistoryService (no eventManager property)
+- Use ONLY the simple event names listed above
 
 ### Event Data Validation
 Tests must verify:
 - Event payload structure matches specifications
-- Timestamp accuracy and format
-- Data type correctness
-- Required vs optional fields
-- Event metadata completeness
+- Data passed directly (no wrapper EventRecord)
+- Simple, flat event payload objects
+- Required fields are present
+- No unnecessary complexity
 
 ### Edge Case Coverage
 Tests must handle:
@@ -163,15 +278,6 @@ Tests must handle:
 // MARKER: HS-029-EVENT-SUBSCRIPTION
 ```
 
-### Test Categories
-```typescript
-// MARKER: BEHAVIORAL-EVENT-TESTS
-// MARKER: EVENT-PAYLOAD-VALIDATION
-// MARKER: EVENT-LISTENER-LIFECYCLE
-// MARKER: EVENT-ERROR-HANDLING
-// MARKER: EVENT-INTEGRATION-SCENARIOS
-```
-
 ## Success Criteria
 
 ### Phase Completion Requirements
@@ -189,21 +295,22 @@ Tests must handle:
 - Concurrent access patterns tested
 
 ### Validation Checklist
-- [ ] History modification events fully tested (HS-026)
-- [ ] Turn completion events fully tested (HS-027)  
-- [ ] Tool commit events fully tested (HS-028)
-- [ ] Event subscription management fully tested (HS-029)
+- [ ] Message events fully tested using `on('message:added', ...)` etc. (HS-026)
+- [ ] State change events fully tested using `on('state:changed', ...)` (HS-027)  
+- [ ] Tool completion events fully tested using `on('tool:completed', ...)` (HS-028)
+- [ ] Event subscription management fully tested with `on()`, `off()`, `once()` (HS-029)
 - [ ] Integration scenarios covered
 - [ ] Edge cases and error handling tested
 - [ ] Performance and memory usage considerations tested
 - [ ] All code markers present
-- [ ] Tests reference event-system.md pseudocode appropriately
+- [ ] ALL tests use direct HistoryService event methods (NO eventManager property)
 
 ## Next Phase
 Phase 20: Event System Implementation - implement the actual event system to make these tests pass.
 
 ## Notes
-- Tests must be written to expect real behavior, not placeholder implementations
-- Reference the pseudocode from `event-system.md` for expected behavior patterns
-- Focus on observable behavior and event data accuracy
-- Consider real-world usage patterns in test scenarios
+- Tests must use ONLY the direct event API: `historyService.on()`, `historyService.off()`, `historyService.once()`
+- Tests must use ONLY the simple event names: 'message:added', 'message:updated', 'message:deleted', 'history:cleared', 'state:changed', 'tool:completed'
+- NO EventManager class or eventManager property
+- NO complex EventRecord types - just simple event data objects
+- Focus on simplicity and consistency

@@ -28,6 +28,8 @@ import { getCoreSystemPromptAsync, getCompressionPrompt } from './prompts.js';
 import { getResponseText } from '../utils/generateContentResponseUtilities.js';
 import { reportError } from '../utils/errorReporting.js';
 import { GeminiChat } from './geminiChat.js';
+import { HistoryService } from '../services/history/index.js';
+import { MessageRole } from '../services/history/types.js';
 import { retryWithBackoff } from '../utils/retry.js';
 import { getErrorMessage } from '../utils/errors.js';
 import { isFunctionResponse } from '../utils/messageInspectors.js';
@@ -175,18 +177,16 @@ export class GeminiClient {
   }
 
   async initialize(contentGeneratorConfig: ContentGeneratorConfig) {
-    // Preserve chat history before resetting
-    const previousHistory = this.chat?.getHistory();
-
-    // Reset the client to force reinitialization with new auth
+    // Only reset the content generator, NOT the chat
+    // The chat instance holds conversation history that should persist
+    // across provider/auth changes
     this.contentGenerator = undefined;
-    this.chat = undefined;
 
-    // Store the new config and previous history for lazy initialization
+    // Store the new config for lazy initialization
     // This ensures the next lazyInitialize() call uses the correct auth config
-    // and preserves conversation history across auth transitions
     this._pendingConfig = contentGeneratorConfig;
-    this._previousHistory = previousHistory;
+
+    // No need to save/restore history - the chat instance persists
   }
 
   private async lazyInitialize() {
@@ -207,19 +207,20 @@ export class GeminiClient {
       this.config.getSessionId(),
     );
 
-    // If we have previous history, restore it when creating the chat
-    // This preserves conversation context across auth transitions and chat resumes
-    if (this._previousHistory && this._previousHistory.length > 0) {
-      // Extract the conversation history after the initial environment setup
-      // The first two messages are always the environment context and acknowledgment
-      const conversationHistory = this._previousHistory.slice(2);
-      this.chat = await this.startChat(conversationHistory);
-    } else {
-      this.chat = await this.startChat();
+    // Only create a new chat if we don't already have one
+    // This preserves conversation history across provider/auth changes
+    if (!this.chat) {
+      // If we have previous history from a resume, use it
+      if (this._previousHistory && this._previousHistory.length > 0) {
+        // Use the full history - context is handled via system instructions
+        this.chat = await this.startChat(this._previousHistory);
+      } else {
+        this.chat = await this.startChat();
+      }
     }
 
     // Clear pending config after successful initialization
-    // Note: We do NOT clear _previousHistory as it may be needed for the chat context
+    // Note: We do NOT clear _previousHistory as it may be needed for chat resume scenarios
     this._pendingConfig = undefined;
   }
 
@@ -374,6 +375,43 @@ export class GeminiClient {
     const toolDeclarations = toolRegistry.getFunctionDeclarations();
     const tools: Tool[] = [{ functionDeclarations: toolDeclarations }];
     const history: Content[] = [...(extraHistory ?? [])];
+
+    // Create a new HistoryService instance for this chat
+    const conversationId = `chat_${Date.now()}`;
+    const historyService = new HistoryService(conversationId);
+
+    // If we have extra history, add it to the service
+    if (extraHistory && extraHistory.length > 0) {
+      for (const content of extraHistory) {
+        const role =
+          content.role?.toLowerCase() === 'model'
+            ? 'model'
+            : content.role?.toLowerCase() === 'user'
+              ? 'user'
+              : content.role?.toLowerCase() === 'system'
+                ? 'system'
+                : content.role?.toLowerCase() === 'tool'
+                  ? 'tool'
+                  : 'user';
+        const messageContent = content.parts
+          ? content.parts
+              .map((p) => p.text || '')
+              .filter((t) => t)
+              .join(' ') || JSON.stringify(content)
+          : JSON.stringify(content);
+        const metadata = {
+          timestamp: Date.now(),
+          source: 'client',
+          originalContent: content,
+        };
+        historyService.addMessage(
+          messageContent,
+          role as MessageRole,
+          metadata,
+        );
+      }
+    }
+
     try {
       const userMemory = this.config.getUserMemory();
       const model = this.config.getModel();
@@ -416,7 +454,7 @@ export class GeminiClient {
           ...generateContentConfigWithThinking,
           tools,
         },
-        history,
+        historyService,
       );
     } catch (error) {
       await reportError(
@@ -751,8 +789,6 @@ export class GeminiClient {
         // Don't continue with recursive call to prevent unwanted Flash execution
         return turn;
       }
-
-      // nextSpeakerChecker disabled
     }
     return turn;
   }
@@ -993,6 +1029,8 @@ export class GeminiClient {
     force: boolean = false,
   ): Promise<ChatCompressionInfo | null> {
     await this.lazyInitialize();
+    // Use curated history which now preserves tool calls
+    // (after fix to isValidContent to include model messages with function calls)
     const curatedHistory = this.getChat().getHistory(true);
 
     // Regardless of `force`, don't do anything if the history is empty.

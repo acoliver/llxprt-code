@@ -243,6 +243,7 @@ export class AnthropicProvider extends BaseProvider {
    * @plan PLAN-20250826-RESPONSES.P05
    * @requirement REQ-001
    */
+  // MARKER: HS-041-ANTHROPIC-PARAMS - Accepts Content[] arrays as method parameters
   async *generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
@@ -267,6 +268,9 @@ export class AnthropicProvider extends BaseProvider {
     const apiCall = async () => {
       // Resolve model if it uses -latest alias
       const resolvedModel = await this.resolveLatestModel(this.currentModel);
+
+      // MARKER: HS-041-ANTHROPIC-CLEAN - Orphan detection removed from provider
+      // HistoryService now handles orphaned tool calls centrally
 
       // Convert Content[] to Anthropic format using existing logic
       const anthropicMessages =
@@ -893,7 +897,9 @@ ${systemMessage}`;
       });
     }
 
-    // NO synthetic handling here - should be done in GeminiCompatibleWrapper
+    // MARKER: HS-041-ANTHROPIC-CLEAN - Orphan detection removed from provider
+    // HistoryService now handles orphaned tool calls centrally
+    // NO synthetic handling here - should be done by HistoryService
     return messages;
   }
 

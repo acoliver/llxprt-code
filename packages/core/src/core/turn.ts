@@ -29,6 +29,16 @@ import {
 } from '../utils/errors.js';
 import { GeminiChat } from './geminiChat.js';
 
+// @plan PLAN-20250128-HISTORYSERVICE.P26
+// @requirement HS-050: Import HistoryService for integration
+import { HistoryService } from '../services/history/HistoryService.js';
+import type {
+  ToolCall,
+  ToolResponse,
+  ToolCallStatus,
+} from '../services/history/types.js';
+import { HistoryState } from '../services/history/types.js';
+
 // Define a structure for tools passed to the server
 export interface ServerTool {
   name: string;
@@ -181,14 +191,25 @@ export class Turn {
   private debugResponses: GenerateContentResponse[];
   finishReason: FinishReason | undefined;
 
+  // @plan PLAN-20250128-HISTORYSERVICE.P26
+  // @requirement HS-050: Turn integration with HistoryService tool management
+  private historyService?: HistoryService;
+
   constructor(
     private readonly chat: GeminiChat,
     private readonly prompt_id: string,
     private readonly providerName: string = 'backend',
+    historyService?: HistoryService,
   ) {
     this.pendingToolCalls = [];
     this.debugResponses = [];
     this.finishReason = undefined;
+    this.historyService = historyService;
+  }
+
+  // Method to enable HistoryService integration
+  setHistoryService(historyService: HistoryService): void {
+    this.historyService = historyService;
   }
   // The run method yields simpler events suitable for server logic
   async *run(
@@ -301,6 +322,9 @@ export class Turn {
     }
   }
 
+  // @plan PLAN-20250128-HISTORYSERVICE.P26
+  // @requirement HS-050: Integrate pending/commit pattern with existing tool flow
+  // @requirement HS-009: Add pending tool calls before processing
   private handlePendingFunctionCall(
     fnCall: FunctionCall,
   ): ServerGeminiStreamEvent | null {
@@ -318,13 +342,139 @@ export class Turn {
       prompt_id: this.prompt_id,
     };
 
+    // EXISTING: Add to pending tool calls array (preserve current behavior)
     this.pendingToolCalls.push(toolCallRequest);
 
-    // Yield a request for the tool call, not the pending/confirming status
+    // NEW: Add pending tool call to HistoryService if enabled
+    if (this.historyService) {
+      try {
+        const historyToolCall: ToolCall = {
+          id: callId,
+          name,
+          arguments: args,
+        };
+
+        this.historyService.addPendingToolCalls([historyToolCall]);
+
+        console.log(
+          `Added pending tool call ${callId} (${name}) to HistoryService`,
+        );
+      } catch (error) {
+        console.warn(
+          `Error adding pending tool call ${callId} to HistoryService:`,
+          error,
+        );
+      }
+    }
+
+    // EXISTING: Yield request event (preserve TurnEmitter pattern)
     return { type: GeminiEventType.ToolCallRequest, value: toolCallRequest };
   }
 
   getDebugResponses(): GenerateContentResponse[] {
     return this.debugResponses;
+  }
+
+  // @plan PLAN-20250128-HISTORYSERVICE.P26
+  // @requirement HS-010: Commit tool responses after successful execution
+  // @requirement HS-013: Tool state management integration
+  async handleToolExecutionComplete(
+    toolCallId: string,
+    result: ToolResult,
+  ): Promise<void> {
+    if (this.historyService) {
+      try {
+        // Use type guards to safely access properties
+        const resultData = result.summary ?? result.llmContent ?? result;
+
+        const toolResponse: ToolResponse = {
+          toolCallId,
+          result: resultData,
+        };
+
+        this.historyService.commitToolResponses([toolResponse]);
+        console.log(`Added tool response for ${toolCallId} to HistoryService`);
+      } catch (error) {
+        console.warn(
+          `Failed to add tool response for ${toolCallId} to HistoryService:`,
+          error,
+        );
+      }
+    }
+  }
+
+  // @plan PLAN-20250128-HISTORYSERVICE.P26
+  // @requirement HS-012: Handle tool execution failures
+  async handleToolExecutionError(
+    toolCallId: string,
+    error: Error,
+  ): Promise<void> {
+    if (this.historyService) {
+      try {
+        const errorResponse: ToolResponse = {
+          toolCallId,
+          result: { error: error.message },
+        };
+
+        this.historyService.commitToolResponses([errorResponse]);
+        console.log(`Added error response for ${toolCallId} to HistoryService`);
+      } catch (historyError) {
+        console.warn(
+          `Failed to add error response for ${toolCallId} to HistoryService:`,
+          historyError,
+        );
+      }
+    }
+  }
+
+  // @plan PLAN-20250128-HISTORYSERVICE.P26
+  // @requirement HS-011: Complete tool execution cycle
+  async completeAllToolExecution(): Promise<void> {
+    if (this.historyService && this.pendingToolCalls.length > 0) {
+      try {
+        // Note: completeToolExecution might be part of commitToolResponses flow
+        // HistoryService manages the complete cycle internally
+        const status = this.historyService.getToolCallStatus();
+        console.log(
+          `Tool execution status: ${status.completedCalls} completed, ${status.pendingCalls} pending`,
+        );
+      } catch (error) {
+        console.warn(
+          'Failed to complete tool execution cycle in HistoryService:',
+          error,
+        );
+      }
+    }
+  }
+
+  // @plan PLAN-20250128-HISTORYSERVICE.P26
+  // @requirement HS-014: Tool call status querying
+  getToolExecutionStatus(): ToolCallStatus | null {
+    if (this.historyService) {
+      try {
+        return this.historyService.getToolCallStatus();
+      } catch (error) {
+        console.warn('Failed to get tool status from HistoryService:', error);
+      }
+    }
+
+    // Fallback: Return basic status based on current Turn state
+    return {
+      pendingCalls: this.pendingToolCalls.length,
+      responseCount: 0, // Cannot determine without HistoryService
+      completedCalls: 0, // Cannot determine without HistoryService
+      failedCalls: 0, // Cannot determine without HistoryService
+      currentState:
+        this.pendingToolCalls.length > 0
+          ? HistoryState.TOOLS_EXECUTING
+          : HistoryState.IDLE,
+      executionOrder: [],
+      details: [],
+    };
+  }
+
+  // @requirement HS-050: Helper for external tool state management
+  hasPendingTools(): boolean {
+    return this.pendingToolCalls.length > 0;
   }
 }

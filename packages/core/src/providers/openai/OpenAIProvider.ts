@@ -88,8 +88,6 @@ type OpenAIMessage = {
     completion_tokens?: number;
     total_tokens?: number;
   };
-  _synthetic?: boolean;
-  _cancelled?: boolean;
 };
 
 export class OpenAIProvider extends BaseProvider {
@@ -386,68 +384,14 @@ export class OpenAIProvider extends BaseProvider {
       store?: boolean;
     },
   ): Promise<AsyncIterableIterator<Content>> {
-    // Detect orphaned messages (last contiguous block without responseId)
-    const orphanedMessages: Content[] = [];
-    let lastResponseId: string | null = null;
-    let inOrphanedBlock = true;
-    let foundAnyResponseId = false;
-
-    // Scan backwards to find the last contiguous block of messages without responseId
-    for (let i = contents.length - 1; i >= 0; i--) {
-      const content = contents[i];
-      const contentWithMetadata = content as Content & {
-        metadata?: { responseId?: string };
-      };
-      const hasResponseId = !!contentWithMetadata.metadata?.responseId;
-
-      if (hasResponseId) {
-        foundAnyResponseId = true;
-      }
-
-      if (inOrphanedBlock && !hasResponseId) {
-        // Still in the orphaned block, collect this message
-        orphanedMessages.unshift(content); // Add to beginning to maintain order
-      } else if (inOrphanedBlock && hasResponseId) {
-        // Found the boundary - this is the last message with a responseId
-        inOrphanedBlock = false;
-        lastResponseId = contentWithMetadata.metadata?.responseId || null;
-        break; // Stop here, we found our parent
-      }
-      // If we're past the orphaned block, stop scanning
-    }
-
-    // If we never found any responseId, all messages are orphaned (first conversation)
-    if (!foundAnyResponseId && orphanedMessages.length === 0) {
-      orphanedMessages.push(...contents);
-    }
-
-    // Log orphaned messages detection
-    if (orphanedMessages.length > 0) {
-      this.logger.debug(
-        () =>
-          `[Responses API] Found ${orphanedMessages.length} orphaned messages to inject, parent: ${lastResponseId || 'none'}`,
-      );
-    }
+    // MARKER: HS-041-OPENAI-CLEAN - Orphan detection removed from provider
+    // HistoryService now handles orphaned tool calls centrally
 
     // Convert Content[] to OpenAI format for internal processing
-    // When we detect orphaned messages, use them as the full conversation
-    let messages: OpenAIMessage[];
-    if (orphanedMessages.length > 0) {
-      // Use the orphaned messages as the conversation
-      // Note: When switching providers, orphanedMessages will contain ALL messages
-      // including any new user message since none have responseId
-      messages = this.converter.toProviderFormat(
-        orphanedMessages,
-      ) as OpenAIMessage[];
-
-      this.logger.debug(
-        () =>
-          `[Responses API] Using ${messages.length} orphaned messages as full conversation, parent: ${lastResponseId || 'none'}`,
-      );
-    } else {
-      // No orphaned messages, just convert normally
-      messages = this.converter.toProviderFormat(contents) as OpenAIMessage[];
-    }
+    // MARKER: HS-041-OPENAI-PARAMS - Accepts Content[] arrays as method parameters
+    const messages = this.converter.toProviderFormat(
+      contents,
+    ) as OpenAIMessage[];
 
     // Check if API key is available (using resolved authentication)
     const apiKey = await this.getAuthToken();
@@ -486,23 +430,18 @@ export class OpenAIProvider extends BaseProvider {
       ? this.toolFormatter.toResponsesTool(tools)
       : undefined;
 
-    // NO synthetic handling here - should be done in GeminiCompatibleWrapper
+    // MARKER: HS-041-OPENAI-CLEAN - Response handling completely removed
+    // Providers no longer generate special responses - handled centrally by HistoryService
     const patchedMessages = messages;
 
     // Build the request
-    // Use the detected lastResponseId if we found orphaned messages, otherwise use provided parentId
-    const effectiveParentId =
-      orphanedMessages.length > 0
-        ? lastResponseId || undefined // Use found parent or undefined if no parent found
-        : options?.parentId; // Use provided parentId if no orphans
-
     const request = buildResponsesRequest({
       model: this.currentModel,
       messages: patchedMessages,
       tools: formattedTools,
       stream: options?.stream ?? true,
       conversationId: options?.conversationId,
-      parentId: effectiveParentId,
+      parentId: options?.parentId,
       tool_choice: options?.tool_choice,
       ...(this.modelParams || {}),
     });
@@ -913,6 +852,10 @@ export class OpenAIProvider extends BaseProvider {
    * @plan PLAN-20250826-RESPONSES.P05
    * @requirement REQ-001
    */
+  // @plan PLAN-20250128-HISTORYSERVICE.P29
+  // @requirement HS-041
+  // @phase provider-updates-impl
+  // @cleanup Remove tool response generation
   async *generateChatCompletion(
     contents: Content[],
     tools?: ITool[],
@@ -975,20 +918,7 @@ export class OpenAIProvider extends BaseProvider {
       return;
     }
 
-    // Don't automatically add synthetic responses - they should only be added when tools are actually cancelled
-    // Check if we have any existing synthetic responses (from actual cancellations)
-    const existingSyntheticCount = messages.filter(
-      (msg) => msg._synthetic,
-    ).length;
-
-    if (existingSyntheticCount > 0) {
-      this.logger.debug(
-        () =>
-          `[Synthetic] Found ${existingSyntheticCount} existing synthetic responses in conversation`,
-      );
-    }
-
-    // Just use the messages as-is without "fixing" them
+    // Use messages as-is - no special response handling
     const patchedMessages = messages;
 
     // Validate tool messages have required tool_call_id
@@ -1003,61 +933,6 @@ export class OpenAIProvider extends BaseProvider {
       throw new Error(
         `OpenAI API requires tool_call_id for all tool messages. Found ${missingIds.length} tool message(s) without IDs.`,
       );
-    }
-
-    // Log synthetic responses for debugging
-    const syntheticMessages = patchedMessages.filter((msg) => msg._synthetic);
-    if (syntheticMessages.length > 0) {
-      this.logger.debug(
-        () =>
-          `[Synthetic] Added ${syntheticMessages.length} synthetic tool responses`,
-      );
-
-      // Check for ordering issues - using debug logger which only executes when enabled
-      this.logger.debug(() => {
-        const orderingErrors: string[] = [];
-        const orderingWarnings: string[] = [];
-
-        for (let i = 0; i < patchedMessages.length - 1; i++) {
-          const current = patchedMessages[i];
-          const next = patchedMessages[i + 1];
-
-          // Check if a tool response comes before its corresponding tool call
-          if (current.role === 'tool' && current.tool_call_id) {
-            // Find the assistant message with this tool call
-            const callIndex = patchedMessages.findIndex(
-              (m) =>
-                m.role === 'assistant' &&
-                m.tool_calls?.some((tc) => tc.id === current.tool_call_id),
-            );
-            if (callIndex === -1 || callIndex > i) {
-              orderingErrors.push(
-                `Tool response ${current.tool_call_id} appears before its tool call or call not found`,
-              );
-            }
-          }
-
-          // Check if we have consecutive assistant messages with tool calls
-          if (
-            current.role === 'assistant' &&
-            current.tool_calls &&
-            next.role === 'assistant' &&
-            next.tool_calls
-          ) {
-            orderingWarnings.push(
-              `Consecutive assistant messages with tool calls at indices ${i} and ${i + 1}`,
-            );
-          }
-        }
-
-        if (orderingErrors.length > 0) {
-          return `[Synthetic Order Check] Errors found: ${orderingErrors.join('; ')}`;
-        } else if (orderingWarnings.length > 0) {
-          return `[Synthetic Order Check] Warnings: ${orderingWarnings.join('; ')}`;
-        } else {
-          return '[Synthetic Order Check] No issues found';
-        }
-      });
     }
 
     const parser = this.requiresTextToolCallParsing()
@@ -1086,21 +961,8 @@ export class OpenAIProvider extends BaseProvider {
     // Get resolved authentication and update client if needed
     await this.updateClientWithResolvedAuth();
 
-    // Strip internal tracking fields that some APIs don't accept
-    // We keep the synthetic responses but remove the metadata fields
-    const cleanedMessages = patchedMessages.map((msg) => {
-      // Create a shallow copy and remove internal fields
-      const { _synthetic, _cancelled, ...cleanMsg } = msg;
-
-      // Log synthetic tool responses for debugging
-      if (msg._synthetic) {
-        this.logger.debug(
-          () => `[Synthetic Tool Response] ${JSON.stringify(cleanMsg)}`,
-        );
-      }
-
-      return cleanMsg;
-    });
+    // Use messages as-is - no internal fields to strip
+    const cleanedMessages = patchedMessages;
 
     this.logger.debug(
       () =>
@@ -1280,11 +1142,6 @@ export class OpenAIProvider extends BaseProvider {
         });
 
         // Log additional diagnostics for 400 errors
-        const hasSyntheticMessages = cleanedMessages.some(
-          (msg) =>
-            msg.role === 'tool' &&
-            msg.content === 'Tool execution cancelled by user',
-        );
         const hasPendingToolCalls = cleanedMessages.some((msg, idx) => {
           if (msg.role === 'assistant' && msg.tool_calls) {
             // Check if there's a matching tool response
@@ -1300,9 +1157,6 @@ export class OpenAIProvider extends BaseProvider {
         });
 
         this.logger.error(() => `${errorLabel} Last 5 messages being sent:`);
-        this.logger.error(
-          () => `${errorLabel} Has synthetic messages: ${hasSyntheticMessages}`,
-        );
         this.logger.error(
           () =>
             `${errorLabel} Has pending tool calls without responses: ${hasPendingToolCalls}`,

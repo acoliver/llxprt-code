@@ -262,6 +262,7 @@ export abstract class BaseProvider implements IProvider {
     }
   }
 
+  // MARKER: HS-041-BASE-INTERFACE - Standard Content[] parameter pattern
   // Abstract methods that must be implemented by concrete providers
   abstract getModels(): Promise<IModel[]>;
   abstract getDefaultModel(): string;

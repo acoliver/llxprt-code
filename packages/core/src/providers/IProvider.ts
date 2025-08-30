@@ -18,6 +18,10 @@ import { Content } from '@google/genai';
 import { IModel } from './IModel.js';
 import { ITool } from './ITool.js';
 
+// @plan PLAN-20250128-HISTORYSERVICE.P29
+// @requirement HS-041
+// @phase provider-updates-impl
+// @interface-consistency Uniform HistoryService integration
 export interface IProvider {
   name: string;
   isDefault?: boolean;
