@@ -11,6 +11,7 @@ import {
   FunctionDeclaration,
   FinishReason,
 } from '@google/genai';
+import { randomUUID } from 'crypto';
 import {
   ToolCallConfirmationDetails,
   ToolResult,
@@ -185,6 +186,13 @@ export type ServerGeminiStreamEvent =
   | ServerGeminiFinishedEvent
   | ServerGeminiLoopDetectedEvent;
 
+// Options for Turn constructor
+export interface TurnOptions {
+  historyService?: HistoryService;
+  conversationId?: string;
+  messageId?: string;
+}
+
 // A turn manages the agentic loop turn within the server context.
 export class Turn {
   readonly pendingToolCalls: ToolCallRequestInfo[];
@@ -193,18 +201,23 @@ export class Turn {
 
   // @plan PLAN-20250128-HISTORYSERVICE.P26
   // @requirement HS-050: Turn integration with HistoryService tool management
-  private historyService?: HistoryService;
+  historyService?: HistoryService;
+  readonly conversationId: string;
+  readonly currentMessageId: string;
 
   constructor(
     private readonly chat: GeminiChat,
     private readonly prompt_id: string,
     private readonly providerName: string = 'backend',
     historyService?: HistoryService,
+    options?: TurnOptions,
   ) {
     this.pendingToolCalls = [];
     this.debugResponses = [];
     this.finishReason = undefined;
-    this.historyService = historyService;
+    this.historyService = historyService || options?.historyService;
+    this.conversationId = options?.conversationId || randomUUID();
+    this.currentMessageId = options?.messageId || randomUUID();
   }
 
   // Method to enable HistoryService integration
@@ -216,12 +229,7 @@ export class Turn {
     req: PartListUnion,
     signal: AbortSignal,
   ): AsyncGenerator<ServerGeminiStreamEvent> {
-    if (process.env.DEBUG) {
-      console.log('DEBUG: Turn.run called');
-      console.log('DEBUG: Turn.run req:', JSON.stringify(req, null, 2));
-      console.log('DEBUG: Turn.run typeof req:', typeof req);
-      console.log('DEBUG: Turn.run Array.isArray(req):', Array.isArray(req));
-    }
+    // Debug logging handled by GeminiChat
 
     try {
       const responseStream = await this.chat.sendMessageStream(

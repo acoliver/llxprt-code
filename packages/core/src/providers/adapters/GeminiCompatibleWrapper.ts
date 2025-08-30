@@ -208,12 +208,10 @@ export class GeminiCompatibleWrapper {
           // FunctionDeclaration from @google/genai uses parametersJsonSchema
           const schema = func.parametersJsonSchema;
 
-          if (process.env.DEBUG) {
-            console.log(
-              `[GeminiCompatibleWrapper] Converting tool ${func.name}:`,
-            );
-            console.log(`  Schema:`, JSON.stringify(schema, null, 2));
-          }
+          this.logger.debug(() => `Converting tool ${func.name}`);
+          this.logger.debug(
+            () => `  Schema: ${JSON.stringify(schema, null, 2)}`,
+          );
 
           providerTools.push({
             type: 'function' as const,
@@ -622,16 +620,10 @@ export class GeminiCompatibleWrapper {
     contents: ContentListUnion,
   ): LegacyProviderMessage[] {
     // Debug logging for OpenRouter issue
-    if (process.env.DEBUG) {
-      console.log(
-        '[GeminiCompatibleWrapper] convertContentsToMessages input:',
-        {
-          type: Array.isArray(contents) ? 'array' : typeof contents,
-          length: Array.isArray(contents) ? contents.length : 'N/A',
-          contents: JSON.stringify(contents).substring(0, 500),
-        },
-      );
-    }
+    this.logger.debug(
+      () =>
+        `convertContentsToMessages input: type=${Array.isArray(contents) ? 'array' : typeof contents}, length=${Array.isArray(contents) ? contents.length : 'N/A'}, contents=${JSON.stringify(contents).substring(0, 500)}`,
+    );
 
     // Normalize ContentListUnion to Content[]
     let contentArray: Content[];

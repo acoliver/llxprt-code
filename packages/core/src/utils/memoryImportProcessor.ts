@@ -8,18 +8,9 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { isSubpath } from './paths.js';
 import { marked } from 'marked';
+import { DebugLogger } from '../debug/index.js';
 
-// Simple console logger for import processing
-const logger = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  debug: (...args: any[]) =>
-    console.debug('[DEBUG] [ImportProcessor]', ...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  warn: (...args: any[]) => console.warn('[WARN] [ImportProcessor]', ...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  error: (...args: any[]) =>
-    console.error('[ERROR] [ImportProcessor]', ...args),
-};
+const logger = new DebugLogger('llxprt:core:memoryImportProcessor');
 
 /**
  * Interface for tracking import processing state to prevent circular imports
@@ -221,7 +212,8 @@ export async function processImports(
   if (importState.currentDepth >= importState.maxDepth) {
     if (debugMode) {
       logger.warn(
-        `Maximum import depth (${importState.maxDepth}) reached. Stopping import processing.`,
+        () =>
+          `Maximum import depth (${importState.maxDepth}) reached. Stopping import processing.`,
       );
     }
     return {
@@ -301,7 +293,8 @@ export async function processImports(
         } catch (error) {
           if (debugMode) {
             logger.warn(
-              `Failed to import ${fullPath}: ${hasMessage(error) ? error.message : 'Unknown error'}`,
+              () =>
+                `Failed to import ${fullPath}: ${hasMessage(error) ? error.message : 'Unknown error'}`,
             );
           }
           // Continue with other imports even if one fails
@@ -384,7 +377,7 @@ export async function processImports(
       } else if (typeof err === 'string') {
         message = err;
       }
-      logger.error(`Failed to import ${importPath}: ${message}`);
+      logger.error(() => `Failed to import ${importPath}: ${message}`);
       result += `<!-- Import failed: ${importPath} - ${message} -->`;
     }
   }

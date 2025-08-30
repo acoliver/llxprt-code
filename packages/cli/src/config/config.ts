@@ -30,6 +30,7 @@ import {
   WriteFileTool,
   MCPServerConfig,
   getSettingsService,
+  DebugLogger,
 } from '@vybestack/llxprt-code-core';
 import { Settings } from './settings.js';
 
@@ -44,12 +45,7 @@ import { isWorkspaceTrusted } from './trustedFolders.js';
 
 const LLXPRT_DIR = '.llxprt';
 
-// Simple console logger for now - replace with actual logger if available
-const logger = {
-  debug: (...args: unknown[]) => console.debug('[DEBUG]', ...args),
-  warn: (...args: unknown[]) => console.warn('[WARN]', ...args),
-  error: (...args: unknown[]) => console.error('[ERROR]', ...args),
-};
+const logger = new DebugLogger('llxprt:cli:config');
 
 export interface CliArgs {
   model: string | undefined;
@@ -541,7 +537,7 @@ export async function loadCliConfig(
   }
 
   if (debugMode) {
-    console.debug('[DEBUG] IDE mode configuration:', {
+    logger.debug(() => 'IDE mode configuration:', {
       'argv.ideMode': argv.ideMode,
       'effectiveSettings.ideMode': effectiveSettings.ideMode,
       'final ideMode': ideMode,

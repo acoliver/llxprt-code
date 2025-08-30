@@ -8,6 +8,7 @@ import { DebugLogger } from '../../debug/index.js';
 import { IModel } from '../IModel.js';
 import { Content } from '@google/genai';
 import { ITool } from '../ITool.js';
+import { ToolIdGenerator } from '../../utils/toolIdGenerator.js';
 import {
   Config,
   AuthType,
@@ -524,32 +525,35 @@ export class GeminiProvider extends BaseProvider {
                   (part as { functionCall: FunctionCall }).functionCall,
               ) || [];
 
-          // Build response content in Gemini format
-          const parts: Part[] = [];
+          // Yield text and function calls separately to match expected format
+          // This ensures compatibility with history service and tool execution
 
-          // Add text part if present
+          // Yield text content if present
           if (text) {
-            parts.push({ text });
-          }
-
-          // Add function calls if any, ensuring they have IDs for compatibility
-          if (functionCalls && functionCalls.length > 0) {
-            for (const call of functionCalls) {
-              // Ensure function call has an ID for compatibility with other providers
-              if (!call.id) {
-                call.id = `${call.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-              }
-              parts.push({ functionCall: call });
-            }
-          }
-
-          // Only yield if there are parts
-          if (parts.length > 0) {
-            const content: Content = {
+            const textContent: Content = {
               role: 'model',
-              parts,
+              parts: [{ text }],
             };
-            yield content;
+            yield textContent;
+          }
+
+          // Yield all function calls together in a single Content object
+          // Gemini expects the number of function call parts to match
+          // the number of function response parts exactly
+          if (functionCalls && functionCalls.length > 0) {
+            // Ensure each call has a unique ID
+            const functionCallParts = functionCalls.map((call) => {
+              // Use centralized ID generator to ensure uniqueness
+              call.id = ToolIdGenerator.ensureId(call.id, 'gemini');
+              return { functionCall: call };
+            });
+
+            // Yield all calls together as Gemini expects
+            const toolContent: Content = {
+              role: 'model',
+              parts: functionCallParts,
+            };
+            yield toolContent;
           }
         }
         return;
@@ -660,28 +664,29 @@ export class GeminiProvider extends BaseProvider {
               (part as { functionCall: FunctionCall }).functionCall,
           ) || [];
 
-      // Build response content in Gemini format
-      const parts: Part[] = [];
+      // Yield text and function calls separately to match expected format
+      // This ensures compatibility with history service and tool execution
 
-      // Add text part if present
+      // Yield text content if present
       if (text) {
-        parts.push({ text });
+        const textContent: Content = {
+          role: 'model',
+          parts: [{ text }],
+        };
+        yield textContent;
       }
 
-      // Add function calls if any
+      // Yield each function call separately
+      // This ensures each tool call is processed as an independent Content object
+      // while still allowing parallel execution
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
-          parts.push({ functionCall: call });
+          const toolContent: Content = {
+            role: 'model',
+            parts: [{ functionCall: call }],
+          };
+          yield toolContent;
         }
-      }
-
-      // Only yield if there are parts
-      if (parts.length > 0) {
-        const content: Content = {
-          role: 'model',
-          parts,
-        };
-        yield content;
       }
     }
   }

@@ -37,7 +37,9 @@ import { getErrorMessage } from '../utils/errors.js';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Unsubscribe, WorkspaceContext } from '../utils/workspaceContext.js';
+import { DebugLogger } from '../debug/index.js';
 
+const logger = new DebugLogger('llxprt:core:mcp-client');
 export const MCP_DEFAULT_TIMEOUT_MSEC = 10 * 60 * 1000; // default to 10 minutes
 
 export type DiscoveredMCPPrompt = Prompt & {
@@ -944,8 +946,9 @@ export async function connectToMcpServer(
             }
           }
         } catch (fetchError) {
-          console.debug(
-            `Failed to fetch www-authenticate header: ${getErrorMessage(fetchError)}`,
+          logger.debug(
+            () =>
+              `Failed to fetch www-authenticate header: ${getErrorMessage(fetchError)}`,
           );
         }
       }
@@ -1336,7 +1339,7 @@ export async function createTransport(
     if (debugMode) {
       transport.stderr!.on('data', (data) => {
         const stderrStr = data.toString().trim();
-        console.debug(`[DEBUG] [MCP STDERR (${mcpServerName})]: `, stderrStr);
+        logger.debug(() => `MCP STDERR (${mcpServerName}): ${stderrStr}`);
       });
     }
     return transport;

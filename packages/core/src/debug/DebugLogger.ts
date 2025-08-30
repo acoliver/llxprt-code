@@ -157,6 +157,45 @@ export class DebugLogger {
     }
   }
 
+  warn(messageOrFn: string | (() => string), ...args: unknown[]): void {
+    // Handle warn level
+    if (!this._enabled) {
+      return;
+    }
+
+    let message: string;
+    if (typeof messageOrFn === 'function') {
+      try {
+        message = messageOrFn();
+      } catch (_error) {
+        message = '[Error evaluating log function]';
+      }
+    } else {
+      message = messageOrFn;
+    }
+
+    message = this.redactSensitive(message);
+    const timestamp = new Date().toISOString();
+
+    const logEntry: LogEntry = {
+      timestamp,
+      namespace: this._namespace,
+      level: 'warn',
+      message,
+      args: args.length > 0 ? args : undefined,
+    };
+
+    const target = this._configManager.getOutputTarget();
+    if (target.includes('file')) {
+      void this._fileOutput.write(logEntry);
+    }
+
+    if (target.includes('stderr')) {
+      // Use console.warn for warnings to maintain proper separation
+      console.warn(`[${this._namespace}]`, message, ...args);
+    }
+  }
+
   error(messageOrFn: string | (() => string), ...args: unknown[]): void {
     // Lines 66-70
     if (!this._enabled) {

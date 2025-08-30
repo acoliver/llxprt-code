@@ -10,6 +10,9 @@ import {
   MessageActionReturn,
   CommandKind,
 } from './types.js';
+import { DebugLogger, getErrorMessage } from '@vybestack/llxprt-code-core';
+
+const logger = new DebugLogger('llxprt:cli:diagnosticsCommand');
 
 /**
  * Get SettingsService instance for diagnostics
@@ -28,9 +31,10 @@ async function getSettingsServiceForDiagnostics(): Promise<{
       on?: (event: string, listener: () => void) => void;
     };
   } catch (error) {
-    if (process.env.DEBUG) {
-      console.warn('Failed to get SettingsService for diagnostics:', error);
-    }
+    logger.debug(
+      () =>
+        `Failed to get SettingsService for diagnostics: ${getErrorMessage(error)}`,
+    );
     return null;
   }
 }
@@ -76,12 +80,10 @@ export const diagnosticsCommand: SlashCommand = {
       try {
         settingsService = await getSettingsServiceForDiagnostics();
       } catch (error) {
-        if (process.env.DEBUG) {
-          console.warn(
-            'Failed to get SettingsService, using legacy data:',
-            error,
-          );
-        }
+        logger.debug(
+          () =>
+            `Failed to get SettingsService, using legacy data: ${getErrorMessage(error)}`,
+        );
         settingsService = null;
       }
       let diagnosticsData: {
@@ -126,12 +128,10 @@ export const diagnosticsCommand: SlashCommand = {
             };
           }
         } catch (error) {
-          if (process.env.DEBUG) {
-            console.warn(
-              'Failed to get diagnostics from SettingsService:',
-              error,
-            );
-          }
+          logger.debug(
+            () =>
+              `Failed to get diagnostics from SettingsService: ${getErrorMessage(error)}`,
+          );
         }
       }
 

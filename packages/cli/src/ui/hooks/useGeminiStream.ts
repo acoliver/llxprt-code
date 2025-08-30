@@ -28,6 +28,9 @@ import {
   EmojiFilter,
   FilterConfiguration,
   DebugLogger,
+  Turn,
+  HistoryService,
+  GeminiChat,
 } from '@vybestack/llxprt-code-core';
 import { type Part, type PartListUnion, FinishReason } from '@google/genai';
 import {
@@ -126,6 +129,14 @@ export const useGeminiStream = (
   const [thought, setThought] = useState<ThoughtSummary | null>(null);
   const queuedToolResponsesRef = useRef<TrackedToolCall[]>([]);
   const queuedSystemFeedbackRef = useRef<string[]>([]);
+  const submitQueryRef = useRef<
+    | ((
+        query: PartListUnion,
+        options?: { isContinuation: boolean },
+        prompt_id?: string,
+      ) => Promise<void>)
+    | null
+  >(null);
   const handleCompletedToolsRef = useRef<
     ((tools: TrackedToolCall[]) => Promise<void>) | null
   >(null);
@@ -158,6 +169,32 @@ export const useGeminiStream = (
     return new GitService(config.getProjectRoot());
   }, [config]);
 
+  // Create HistoryService instance
+  const historyService = useMemo(
+    () => new HistoryService(`ui_session_${Date.now()}`),
+    [],
+  );
+
+  // Create Turn instance with HistoryService
+  const turn = useMemo(() => {
+    // Note: We don't need the actual chat instance for tool tracking
+    // Turn only uses it for streaming, not for tool execution
+    // Create a minimal stub that satisfies the GeminiChat interface
+    const chatStub = {} as GeminiChat;
+
+    const newTurn = new Turn(
+      chatStub,
+      config.getSessionId(),
+      'ui', // Provider name for UI context
+      historyService,
+      {
+        conversationId: `ui_conv_${config.getSessionId()}`,
+        messageId: `ui_msg_${Date.now()}`,
+      },
+    );
+    return newTurn;
+  }, [config, historyService]);
+
   const [toolCalls, scheduleToolCalls, markToolsAsSubmitted] =
     useReactToolScheduler(
       async (completedToolCallsFromScheduler) => {
@@ -181,6 +218,7 @@ export const useGeminiStream = (
       setPendingHistoryItem,
       getPreferredEditor,
       onEditorClose,
+      turn,
     );
 
   const pendingToolCallGroupDisplay = useMemo(
@@ -265,11 +303,7 @@ export const useGeminiStream = (
       } else if (pendingItem.type === 'tool_group') {
         // Don't add incomplete tool groups - these can corrupt context
         // Tool groups are only valid if they have completed tool calls
-        if (process.env.DEBUG) {
-          console.log(
-            '[useGeminiStream] Skipping incomplete tool_group on cancel',
-          );
-        }
+        streamLogger.debug(() => 'Skipping incomplete tool_group on cancel');
         // Don't add incomplete tool groups to history
       } else {
         // For other types that are complete (info, error, etc), add as-is
@@ -319,6 +353,20 @@ export const useGeminiStream = (
         return { queryToSend: null, shouldProceed: false };
       }
 
+      // Check if we have queued system feedback to send (e.g., from tool validation errors)
+      // If so, prepend it to the query but DON'T clear it here - let the finally block handle it
+      let modifiedQuery = query;
+      if (
+        queuedSystemFeedbackRef.current.length > 0 &&
+        typeof query === 'string'
+      ) {
+        const feedback = queuedSystemFeedbackRef.current.join('\n');
+        // Don't clear the queue here - it will be cleared in the finally block after successful processing
+        // This ensures we don't lose the feedback if something goes wrong
+        // Prepend the system feedback to the user's query
+        modifiedQuery = `${feedback}\n\n${query}`;
+      }
+
       // Lazily refresh auth if needed.
       if (!geminiClient.isInitialized()) {
         onDebugMessage('[Auth] GeminiClient not initialized, checking auth...');
@@ -354,8 +402,8 @@ export const useGeminiStream = (
 
       let localQueryToSendToGemini: PartListUnion | null = null;
 
-      if (typeof query === 'string') {
-        const trimmedQuery = query.trim();
+      if (typeof modifiedQuery === 'string') {
+        const trimmedQuery = modifiedQuery.trim();
         onDebugMessage(`User query: '${trimmedQuery}'`);
         await logger?.logMessage(MessageSenderType.USER, trimmedQuery);
 
@@ -431,7 +479,7 @@ export const useGeminiStream = (
         }
       } else {
         // It's a function response (PartListUnion that isn't a string)
-        localQueryToSendToGemini = query;
+        localQueryToSendToGemini = modifiedQuery;
       }
 
       if (localQueryToSendToGemini === null) {
@@ -471,14 +519,10 @@ export const useGeminiStream = (
       let newGeminiMessageBuffer = currentGeminiMessageBuffer + eventValue;
 
       // Debug logging for repetition issue
-      if (process.env.DEBUG) {
-        console.log('[useGeminiStream] Content event:', {
-          eventValue: eventValue.substring(0, 100),
-          currentBuffer: currentGeminiMessageBuffer.substring(0, 100),
-          newBuffer: newGeminiMessageBuffer.substring(0, 100),
-          pendingType: pendingHistoryItemRef.current?.type,
-        });
-      }
+      streamLogger.debug(
+        () =>
+          `Content event: eventValue=${eventValue.substring(0, 100)}, currentBuffer=${currentGeminiMessageBuffer.substring(0, 100)}, newBuffer=${newGeminiMessageBuffer.substring(0, 100)}, pendingType=${pendingHistoryItemRef.current?.type}`,
+      );
 
       if (
         pendingHistoryItemRef.current?.type !== 'gemini' &&
@@ -632,7 +676,7 @@ export const useGeminiStream = (
 
       // Check if this is a tool validation error that should allow retry
       // These errors indicate the model attempted a tool call with incorrect parameters
-      const isToolValidationError = 
+      const isToolValidationError =
         errorText.includes('Tool call validation failed') ||
         errorText.includes('tool call validation failed') ||
         errorText.includes('parameters for tool') ||
@@ -651,13 +695,31 @@ export const useGeminiStream = (
           },
           userMessageTimestamp,
         );
-        
-        // Store error for retry after submitQuery is defined
-        // This will be processed in a useEffect after all hooks are initialized
-        queuedSystemFeedbackRef.current.push(
-          `The previous tool call failed with a validation error. Please review the error message above and retry with the correct parameters. The error was: ${errorText}`
-        );
-        
+
+        // Queue the system feedback to be sent with the retry
+        // The model will receive this feedback and can retry with correct parameters
+        const systemFeedback = `The previous tool call failed with a validation error. Please review the error message and retry with the correct parameters. Error: ${errorText}`;
+        queuedSystemFeedbackRef.current.push(systemFeedback);
+
+        // Mark as not responding so retry can proceed
+        setIsResponding(false);
+
+        // Trigger an automatic retry by submitting the feedback as a system message
+        // Use setTimeout to ensure the current processing completes first
+        setTimeout(() => {
+          // Only retry if we still have the feedback queued and submitQuery is available
+          if (
+            queuedSystemFeedbackRef.current.length > 0 &&
+            submitQueryRef.current
+          ) {
+            // Submit the feedback as a continuation to trigger retry
+            submitQueryRef.current(
+              'Please retry the tool call with the correct parameters based on the error feedback above.',
+              { isContinuation: true },
+            );
+          }
+        }, 100);
+
         return; // Don't process as terminal error
       }
 
@@ -870,12 +932,10 @@ export const useGeminiStream = (
             break;
           }
           case ServerGeminiEventType.ToolCallRequest:
-            if (process.env.DEBUG) {
-              console.log(
-                '[DEBUG] ToolCallRequest event:',
-                JSON.stringify(event.value, null, 2),
-              );
-            }
+            streamLogger.debug(
+              () =>
+                `ToolCallRequest event: ${JSON.stringify(event.value, null, 2)}`,
+            );
             toolCallRequests.push(event.value);
             break;
           case ServerGeminiEventType.UserCancelled:
@@ -1060,16 +1120,35 @@ export const useGeminiStream = (
         if (queuedToolResponsesRef.current.length > 0) {
           const queuedTools = [...queuedToolResponsesRef.current];
           queuedToolResponsesRef.current = [];
-          if (process.env.DEBUG) {
-            console.log(
-              '[DEBUG] Processing queued tool responses:',
-              queuedTools.map((tc) => tc.request.name),
-            );
-          }
+          streamLogger.debug(
+            () =>
+              `Processing queued tool responses: ${queuedTools.map((tc) => tc.request.name)}`,
+          );
           // Process the queued tools now that we're not responding
           if (handleCompletedToolsRef.current) {
             await handleCompletedToolsRef.current(queuedTools);
           }
+        }
+
+        // Process any queued system feedback (from tool validation errors)
+        // This ensures the model gets the feedback and can retry
+        if (queuedSystemFeedbackRef.current.length > 0) {
+          const feedback = queuedSystemFeedbackRef.current.join('\n');
+          queuedSystemFeedbackRef.current = []; // Clear the queue
+
+          streamLogger.debug(
+            () => `Processing queued system feedback for retry: ${feedback}`,
+          );
+
+          // Use setTimeout to ensure state has updated and we're not in a recursive call
+          setTimeout(() => {
+            // Recursively call submitQuery with the feedback
+            submitQuery(
+              feedback,
+              { isContinuation: true },
+              undefined, // Let it generate a new prompt_id
+            );
+          }, 100);
         }
       }
     },
@@ -1102,12 +1181,10 @@ export const useGeminiStream = (
           ...queuedToolResponsesRef.current,
           ...completedToolCallsFromScheduler,
         ];
-        if (process.env.DEBUG) {
-          console.log(
-            '[DEBUG] Queuing tool responses while model is responding:',
-            completedToolCallsFromScheduler.map((tc) => tc.request.name),
-          );
-        }
+        streamLogger.debug(
+          () =>
+            `Queuing tool responses while model is responding: ${completedToolCallsFromScheduler.map((tc) => tc.request.name)}`,
+        );
         return;
       }
 
@@ -1200,12 +1277,10 @@ export const useGeminiStream = (
 
         if (pendingTools.length > 0) {
           // Still waiting for other tools in this turn, skip for now
-          if (process.env.DEBUG) {
-            console.log(
-              `[DEBUG] Waiting for ${pendingTools.length} more tools to complete for prompt ${promptId}`,
-              pendingTools.map((t: TrackedToolCall) => t.request.name),
-            );
-          }
+          streamLogger.debug(
+            () =>
+              `Waiting for ${pendingTools.length} more tools to complete for prompt ${promptId}: ${pendingTools.map((t: TrackedToolCall) => t.request.name)}`,
+          );
           continue;
         }
 
@@ -1215,11 +1290,10 @@ export const useGeminiStream = (
           allToolsInBatch.length > 0 ? allToolsInBatch : toolsInPrompt;
 
         // All tools for this prompt_id are complete, process them
-        if (process.env.DEBUG) {
-          console.log(
-            `[DEBUG] All tools complete for prompt ${promptId}, sending ${toolsToProcess.length} responses`,
-          );
-        }
+        streamLogger.debug(
+          () =>
+            `All tools complete for prompt ${promptId}, sending ${toolsToProcess.length} responses`,
+        );
 
         // If all the tools were cancelled, don't submit a response to Gemini.
         const allToolsCancelled = toolsToProcess.every(
@@ -1227,13 +1301,15 @@ export const useGeminiStream = (
         );
 
         if (allToolsCancelled) {
-          // When all tools are cancelled, we don't continue the conversation
-          // We should NOT modify history - just mark tools as submitted and continue
-          // The conversation history should remain intact for provider switching
+          // When all tools are cancelled, add a cancelled message to history
+          await geminiClient.addHistory({
+            role: 'user',
+            parts: [{ text: 'cancelled' }],
+          });
 
           streamLogger.debug(
             () =>
-              `[CANCELLATION] All ${toolsToProcess.length} tools cancelled - not modifying history`,
+              `[CANCELLATION] All ${toolsToProcess.length} tools cancelled - added cancelled message to history`,
           );
 
           const callIdsToMarkAsSubmitted = toolsToProcess.map(
@@ -1273,48 +1349,37 @@ export const useGeminiStream = (
                 // Update the history with the modified message
                 geminiClient.setHistory(history);
 
-                if (process.env.DEBUG) {
-                  console.log(
-                    `[DEBUG] Added ${syntheticCalls.length} synthetic tool calls for cancelled tools`,
-                  );
-                }
+                streamLogger.debug(
+                  () =>
+                    `Added ${syntheticCalls.length} synthetic tool calls for cancelled tools`,
+                );
                 break;
               }
             }
           }
         }
 
-        const responsesToSend: Part[] = toolsToProcess.map(
-          (toolCall, index) => {
-            if (process.env.DEBUG) {
-              console.log(
-                `[DEBUG] Tool response for ${toolCall.request.name} (${toolCall.request.callId}):`,
-                JSON.stringify(toolCall.response.responseParts, null, 2),
-              );
-            }
+        // REMOVED: Building responsesToSend array - no longer needed
+        // Tool responses are now committed to HistoryService by CoreToolScheduler
+        // via turn.handleToolExecutionComplete(). We don't manually send them.
 
-            // For the last tool response, append any queued system feedback
-            // This ensures the model receives the emoji filter warnings
-            if (
-              index === toolsToProcess.length - 1 &&
-              queuedSystemFeedbackRef.current.length > 0
-            ) {
-              const feedbackMessages =
-                queuedSystemFeedbackRef.current.join('\n');
-              queuedSystemFeedbackRef.current = []; // Clear the queue
+        // Clear any queued system feedback since we're not sending responses manually
+        if (queuedSystemFeedbackRef.current.length > 0) {
+          const feedbackMessages = queuedSystemFeedbackRef.current.join('\n');
+          queuedSystemFeedbackRef.current = []; // Clear the queue
+          streamLogger.debug(
+            () =>
+              `Cleared queued system feedback (now handled by HistoryService): ${feedbackMessages}`,
+          );
+        }
 
-              // Since we need to return a single Part (functionResponse),
-              // we can't append text directly. Log a warning instead.
-              console.warn(
-                '[Warning] System feedback queued but cannot be appended to function response:',
-                feedbackMessages,
-              );
-            }
-
-            // Each responseParts should be a functionResponse object
-            return toolCall.response.responseParts as Part;
-          },
-        );
+        // Log tool completions for debugging
+        toolsToProcess.forEach((toolCall) => {
+          streamLogger.debug(
+            () =>
+              `Tool completed: ${toolCall.request.name} (${toolCall.request.callId}) - response handled by HistoryService`,
+          );
+        });
 
         const callIdsToMarkAsSubmitted = toolsToProcess.map(
           (toolCall) => toolCall.request.callId,
@@ -1327,68 +1392,68 @@ export const useGeminiStream = (
           return;
         }
 
-        // Debug logging BEFORE merging
-        if (process.env.DEBUG) {
-          console.log(
-            '[DEBUG] responsesToSend before merge:',
-            JSON.stringify(responsesToSend, null, 2),
-          );
-          console.log(
-            '[DEBUG] responsesToSend length:',
-            responsesToSend.length,
-          );
-          responsesToSend.forEach((resp, idx) => {
-            streamLogger.debug(
-              () => `responsesToSend[${idx}] type: ${typeof resp}`,
-            );
-            console.log(
-              `[DEBUG] responsesToSend[${idx}] isArray:`,
-              Array.isArray(resp),
-            );
+        // Check if ALL tool calls were cancelled
+        const allCancelled = toolsToProcess.every(
+          (toolCall) => toolCall.status === 'cancelled',
+        );
+
+        if (allCancelled) {
+          // If all tools were cancelled, add a history entry directly instead of calling the API
+          await geminiClient.addHistory({
+            role: 'user',
+            parts: [{ text: 'cancelled' }],
           });
-        }
 
-        // For Gemini, when there are multiple function responses, they should be sent
-        // as an array of parts in a single message
-        if (responsesToSend.length === 1) {
-          // Single response - send as-is
-          if (process.env.DEBUG) {
-            console.log('[DEBUG] Single function response, sending directly');
-          }
-          submitQuery(
-            responsesToSend[0],
-            {
-              isContinuation: true,
-            },
-            promptId,
+          streamLogger.debug(
+            () =>
+              `All ${toolsToProcess.length} tool calls were cancelled - added history entry directly`,
           );
-          // Mark as submitted after sending
-          markToolsAsSubmitted(callIdsToMarkAsSubmitted);
         } else {
-          // Multiple responses - send as array of parts
-          if (process.env.DEBUG) {
-            console.log(
-              `[DEBUG] Multiple function responses (${responsesToSend.length}), sending as array`,
-            );
-            console.log(
-              '[DEBUG] Function responses to send:',
-              JSON.stringify(responsesToSend, null, 2),
-            );
+          // Build tool responses to send back to the model
+          // Note: HistoryService tracks these for validation, but we still need to
+          // send them via submitQuery to continue the conversation
+          const responsesToSend: Part[] = [];
+
+          for (const toolCall of toolsToProcess) {
+            if (toolCall.status === 'cancelled') {
+              responsesToSend.push({
+                functionResponse: {
+                  id: toolCall.request.callId,
+                  name: toolCall.request.name,
+                  response: { cancelled: true },
+                },
+              });
+            } else if ('response' in toolCall && toolCall.response) {
+              // For completed tools (success or error), use the responseParts
+              const completedCall = toolCall as TrackedCompletedToolCall;
+              // responseParts is already a Part object (functionResponse)
+              responsesToSend.push(
+                completedCall.response.responseParts as Part,
+              );
+            }
           }
 
-          // Send all function responses as an array of parts
-          // Gemini expects multiple function responses as separate parts in the same message
-          submitQuery(
-            responsesToSend,
-            {
-              isContinuation: true,
-            },
-            promptId, // All tool calls from same turn should have same prompt_id
-          );
+          // Send the tool responses back to continue the conversation
+          // Note: HistoryService validates these through Turn.handleToolExecutionComplete()
+          // which prevents orphaned tool calls, but we still need to send them
+          if (responsesToSend.length > 0) {
+            streamLogger.debug(
+              () =>
+                `Sending ${responsesToSend.length} tool responses via submitQuery (validated by HistoryService)`,
+            );
 
-          // Mark all as submitted after sending
-          markToolsAsSubmitted(callIdsToMarkAsSubmitted);
+            submitQuery(
+              responsesToSend,
+              {
+                isContinuation: true,
+              },
+              promptId,
+            );
+          }
         }
+
+        // Mark tools as submitted for UI state tracking
+        markToolsAsSubmitted(callIdsToMarkAsSubmitted);
       } // End of prompt_id loop
     },
     [
@@ -1511,6 +1576,11 @@ export const useGeminiStream = (
     // FIX: Removed 'history' from dependencies to prevent infinite loops
     // We use historyRef.current to access the latest history value
   }, [toolCalls, config, onDebugMessage, gitService, geminiClient]);
+
+  // Update the ref so handleErrorEvent can access submitQuery
+  useEffect(() => {
+    submitQueryRef.current = submitQuery;
+  }, [submitQuery]);
 
   return {
     streamingState,

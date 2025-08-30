@@ -32,6 +32,8 @@ import {
   GeminiClient,
   GeminiEventType as ServerGeminiEventType,
   AnyToolInvocation,
+  // Turn,
+  // HistoryService,
 } from '@vybestack/llxprt-code-core';
 import { Part, PartListUnion } from '@google/genai';
 import { UseHistoryManagerReturn } from './useHistoryManager.js';
@@ -64,6 +66,36 @@ const MockedUserPromptEvent = vi.hoisted(() =>
 );
 const mockParseAndFormatApiError = vi.hoisted(() => vi.fn());
 
+// Mock Turn in the core module is handled above
+
+const mockUseReactToolScheduler = useReactToolScheduler as Mock;
+vi.mock('./useReactToolScheduler.js', async (importOriginal) => {
+  const actualSchedulerModule = (await importOriginal()) as any;
+  return {
+    ...(actualSchedulerModule || {}),
+    useReactToolScheduler: vi.fn(),
+  };
+});
+
+// Create mock Turn class
+const MockedTurnClass = vi.hoisted(() =>
+  vi.fn().mockImplementation(function (
+    this: any,
+    _chat: any,
+    _promptId: string,
+    _providerName: string,
+    _historyService: any,
+    _options: any,
+  ) {
+    this.pendingToolCalls = [];
+    this.conversationId = 'mock-conversation-id';
+    this.currentMessageId = 'mock-message-id';
+    this.finishReason = undefined;
+    this.historyService = _historyService;
+  }),
+);
+
+// Mock Turn in the core module
 vi.mock('@vybestack/llxprt-code-core', async (importOriginal) => {
   const actualCoreModule = (await importOriginal()) as any;
   return {
@@ -72,15 +104,12 @@ vi.mock('@vybestack/llxprt-code-core', async (importOriginal) => {
     GeminiClient: MockedGeminiClientClass,
     UserPromptEvent: MockedUserPromptEvent,
     parseAndFormatApiError: mockParseAndFormatApiError,
-  };
-});
-
-const mockUseReactToolScheduler = useReactToolScheduler as Mock;
-vi.mock('./useReactToolScheduler.js', async (importOriginal) => {
-  const actualSchedulerModule = (await importOriginal()) as any;
-  return {
-    ...(actualSchedulerModule || {}),
-    useReactToolScheduler: vi.fn(),
+    Turn: MockedTurnClass,
+    HistoryService: vi.fn().mockImplementation(() => ({
+      getToolCall: vi.fn(),
+      updateToolCall: vi.fn(),
+      recordToolCall: vi.fn(),
+    })),
   };
 });
 
@@ -264,7 +293,6 @@ describe('useGeminiStream', () => {
   let mockOnDebugMessage: Mock;
   let mockHandleSlashCommand: Mock;
   let mockScheduleToolCalls: Mock;
-  let mockCancelAllToolCalls: Mock;
   let mockMarkToolsAsSubmitted: Mock;
   let handleAtCommandSpy: MockInstance;
 
@@ -332,14 +360,12 @@ describe('useGeminiStream', () => {
 
     // Mock return value for useReactToolScheduler
     mockScheduleToolCalls = vi.fn();
-    mockCancelAllToolCalls = vi.fn();
     mockMarkToolsAsSubmitted = vi.fn();
 
     // Default mock for useReactToolScheduler to prevent toolCalls being undefined initially
     mockUseReactToolScheduler.mockReturnValue([
       [], // Default to empty array for toolCalls
       mockScheduleToolCalls,
-      mockCancelAllToolCalls,
       mockMarkToolsAsSubmitted,
     ]);
 
@@ -372,10 +398,26 @@ describe('useGeminiStream', () => {
       currentToolCalls = newToolCalls;
     };
 
-    mockUseReactToolScheduler.mockImplementation(() => [
+    // Create mock Turn instance for the tests
+    const mockHistoryService = new (vi.fn().mockImplementation(() => ({
+      getToolCall: vi.fn(),
+      updateToolCall: vi.fn(),
+      recordToolCall: vi.fn(),
+    })))();
+    const _mockTurn = new MockedTurnClass(
+      {} as Record<string, unknown>,
+      'test-prompt-id',
+      'test-provider',
+      mockHistoryService,
+      {
+        conversationId: 'test-conversation-id',
+        messageId: 'test-message-id',
+      },
+    );
+
+    mockUseReactToolScheduler.mockImplementation((_onComplete) => [
       currentToolCalls,
       mockScheduleToolCalls,
-      mockCancelAllToolCalls,
       mockMarkToolsAsSubmitted,
     ]);
 

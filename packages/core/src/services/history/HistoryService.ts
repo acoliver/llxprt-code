@@ -518,13 +518,39 @@ export class HistoryService {
    */
   abortPendingToolCalls(): void {
     const count = this.pendingToolCalls.size;
+
+    // Create synthetic responses for all pending calls to prevent orphans
+    if (count > 0) {
+      const syntheticResponses: ToolResponse[] = Array.from(
+        this.pendingToolCalls.values(),
+      ).map((call) => ({
+        toolCallId: call.id,
+        result: {
+          error: '[Operation Cancelled] Tool call was interrupted by user',
+          cancelled: true,
+        },
+      }));
+
+      // Commit the synthetic responses to maintain call/response pairing
+      this.commitToolResponses(syntheticResponses);
+      console.log(
+        '[HistoryService] Created synthetic responses for',
+        count,
+        'aborted tool calls',
+      );
+    }
+
+    // Clear pending calls (they've been committed with synthetic responses)
     this.pendingToolCalls.clear();
 
     if (
       this.state === HistoryState.TOOLS_PENDING ||
       this.state === HistoryState.TOOLS_EXECUTING
     ) {
-      this.internalTransitionTo(HistoryState.IDLE, 'tool calls aborted');
+      this.internalTransitionTo(
+        HistoryState.IDLE,
+        'tool calls aborted with synthetic responses',
+      );
     }
 
     console.log('[HistoryService] Pending tool calls aborted:', count);

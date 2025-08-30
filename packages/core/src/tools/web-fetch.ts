@@ -20,7 +20,9 @@ import { getResponseText } from '../utils/generateContentResponseUtilities.js';
 import { fetchWithTimeout, isPrivateIp } from '../utils/fetch.js';
 import { convert } from 'html-to-text';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
+import { DebugLogger } from '../debug/index.js';
 
+const logger = new DebugLogger('llxprt:core:web-fetch');
 const URL_FETCH_TIMEOUT_MS = 10000;
 const MAX_CONTENT_LENGTH = 100000;
 
@@ -211,12 +213,7 @@ class WebFetchToolInvocation extends BaseToolInvocation<
         { signal },
       );
 
-      if (process.env.DEBUG) {
-        console.log(
-          '[WEB-FETCH] Raw response:',
-          JSON.stringify(response, null, 2),
-        );
-      }
+      logger.debug(() => `Raw response: ${JSON.stringify(response, null, 2)}`);
 
       // Cast response to expected type for better type safety
       const geminiResponse = response as GenerateContentResponse;
@@ -301,9 +298,7 @@ class WebFetchToolInvocation extends BaseToolInvocation<
       };
     } catch (error) {
       const errorMessage = getErrorMessage(error);
-      if (process.env.DEBUG) {
-        console.error('[WEB-FETCH] Error:', error);
-      }
+      logger.debug(() => `Error: ${getErrorMessage(error)}`);
       return {
         llmContent: `Error during web fetch: ${errorMessage}`,
         returnDisplay: `Error during web fetch: ${errorMessage}`,

@@ -13,8 +13,14 @@ import {
 } from './types.js';
 import { getProviderManager } from '../../providers/providerManagerInstance.js';
 import { MessageType } from '../types.js';
-import { AuthType } from '@vybestack/llxprt-code-core';
+import {
+  AuthType,
+  DebugLogger,
+  getErrorMessage,
+} from '@vybestack/llxprt-code-core';
 import type { SettingsService } from '@vybestack/llxprt-code-core/src/settings/SettingsService.js';
+
+const logger = new DebugLogger('llxprt:cli:providerCommand');
 
 /**
  * Get SettingsService instance for provider switching
@@ -27,12 +33,10 @@ async function getSettingsServiceForProvider(): Promise<SettingsService> {
 
     return getSettingsService();
   } catch (error) {
-    if (process.env.DEBUG) {
-      console.warn(
-        'Failed to get SettingsService for provider switching:',
-        error,
-      );
-    }
+    logger.debug(
+      () =>
+        `Failed to get SettingsService for provider switching: ${getErrorMessage(error)}`,
+    );
     throw error;
   }
 }
@@ -98,12 +102,10 @@ export const providerCommand: SlashCommand = {
 
         // Don't return early - continue with the rest of the setup
       } catch (error) {
-        if (process.env.DEBUG) {
-          console.warn(
-            'SettingsService provider switch failed, falling back to legacy method:',
-            error,
-          );
-        }
+        logger.debug(
+          () =>
+            `SettingsService provider switch failed, falling back to legacy method: ${getErrorMessage(error)}`,
+        );
       }
 
       // Update config if available

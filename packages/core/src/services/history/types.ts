@@ -60,6 +60,8 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: unknown; // Changed from 'args' to 'arguments' to match usage
+  timestamp?: Date; // Optional timestamp for integration tests
+  metadata?: Record<string, unknown>; // Optional metadata for integration tests
 }
 
 export interface ToolCallFunction {
@@ -112,6 +114,57 @@ export class StateError extends Error {
     super(message);
     this.name = 'StateError';
   }
+}
+
+// Integration test types for Phase 30
+export enum ProviderType {
+  OPENAI = 'openai',
+  ANTHROPIC = 'anthropic',
+  GEMINI = 'gemini',
+}
+
+// Separate interface for integration tests with Date timestamps
+export interface ConversationMessage {
+  id: string;
+  content: string;
+  role: MessageRole;
+  timestamp: Date; // Use Date for integration tests
+  metadata: MessageMetadata & { [key: string]: unknown };
+  conversationId?: string;
+  provider: ProviderType;
+  toolCalls?: ToolCall[];
+  toolResponses?: ToolResponse[];
+}
+
+export interface ConversationHistory {
+  id: string;
+  messages: ConversationMessage[];
+  metadata: {
+    created: Date;
+    lastUpdated: Date;
+    provider: ProviderType;
+    [key: string]: unknown;
+  };
+}
+
+export interface ToolResult {
+  id: string;
+  callId: string;
+  success: boolean;
+  result: unknown;
+  timestamp: Date;
+  executionTime: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ToolExecutionChain {
+  id: string;
+  steps: Array<{
+    toolCall: ToolCall;
+    result?: ToolResult;
+    timestamp: Date;
+  }>;
+  metadata: Record<string, unknown>;
 }
 
 // EVENT SYSTEM REMOVED - Events were unnecessary overengineering

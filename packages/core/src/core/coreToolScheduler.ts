@@ -22,6 +22,7 @@ import {
   AnyDeclarativeTool,
   AnyToolInvocation,
 } from '../index.js';
+import { Turn } from './turn.js';
 import { ToolCallTrackerService } from '../services/tool-call-tracker-service.js';
 import { Part, PartListUnion } from '@google/genai';
 import { getResponseTextFromParts } from '../utils/generateContentResponseUtilities.js';
@@ -273,6 +274,7 @@ interface CoreToolSchedulerOptions {
   getPreferredEditor: () => EditorType | undefined;
   config: Config;
   onEditorClose: () => void;
+  turn?: Turn;
 }
 
 export class CoreToolScheduler {
@@ -289,6 +291,7 @@ export class CoreToolScheduler {
   }> = [];
   private isProcessingBatch = false;
   private onEditorClose: () => void;
+  private turn?: Turn;
 
   constructor(options: CoreToolSchedulerOptions) {
     this.config = options.config;
@@ -298,6 +301,7 @@ export class CoreToolScheduler {
     this.onToolCallsUpdate = options.onToolCallsUpdate;
     this.getPreferredEditor = options.getPreferredEditor;
     this.onEditorClose = options.onEditorClose;
+    this.turn = options.turn;
   }
 
   private setStatusInternal(
@@ -858,6 +862,16 @@ export class CoreToolScheduler {
     const invocation = scheduledCall.invocation;
     this.setStatusInternal(callId, 'executing');
 
+    // Record tool execution start with HistoryService if available
+    if (this.turn?.historyService) {
+      const toolCall = {
+        id: callId,
+        name: toolName,
+        arguments: scheduledCall.request.args,
+      };
+      this.turn.historyService.addPendingToolCalls([toolCall]);
+    }
+
     // Start tracking the tool call execution
     const sessionId =
       typeof this.config.getSessionId === 'function'
@@ -923,6 +937,11 @@ export class CoreToolScheduler {
             errorType: undefined,
           };
           this.setStatusInternal(callId, 'success', successResponse);
+
+          // Record successful completion with Turn/HistoryService
+          if (this.turn) {
+            await this.turn.handleToolExecutionComplete(callId, toolResult);
+          }
         } else {
           // It is a failure
           const error = new Error(toolResult.error.message);
@@ -932,25 +951,38 @@ export class CoreToolScheduler {
             toolResult.error.type,
           );
           this.setStatusInternal(callId, 'error', errorResponse);
+
+          // Record error with Turn/HistoryService
+          if (this.turn) {
+            await this.turn.handleToolExecutionError(callId, error);
+          }
         }
       })
-      .catch((executionError: Error) => {
+      .catch(async (executionError: Error) => {
         // Mark tool call as failed on error
         if (toolCallId) {
           ToolCallTrackerService.failToolCallTracking(sessionId, toolCallId);
         }
+
+        const error =
+          executionError instanceof Error
+            ? executionError
+            : new Error(String(executionError));
 
         this.setStatusInternal(
           callId,
           'error',
           createErrorResponse(
             scheduledCall.request,
-            executionError instanceof Error
-              ? executionError
-              : new Error(String(executionError)),
+            error,
             ToolErrorType.UNHANDLED_EXCEPTION,
           ),
         );
+
+        // Record error with Turn/HistoryService
+        if (this.turn) {
+          await this.turn.handleToolExecutionError(callId, error);
+        }
       });
   }
 

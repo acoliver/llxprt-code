@@ -64,16 +64,14 @@ function createUserContentWithFunctionResponseFix(
   // Handle array of parts or nested function response arrays
   const parts: Part[] = [];
 
-  if (process.env.DEBUG) {
-    console.log(
-      '[DEBUG] createUserContentWithFunctionResponseFix - input message:',
-      JSON.stringify(message, null, 2),
-    );
-    console.log(
-      '[DEBUG] createUserContentWithFunctionResponseFix - input type check - isArray:',
-      Array.isArray(message),
-    );
-  }
+  geminiChatLogger.debug(
+    () =>
+      `createUserContentWithFunctionResponseFix - input message: ${JSON.stringify(message, null, 2)}`,
+  );
+  geminiChatLogger.debug(
+    () =>
+      `createUserContentWithFunctionResponseFix - input type check - isArray: ${Array.isArray(message)}`,
+  );
 
   // If the message is an array, process each element
   if (Array.isArray(message)) {
@@ -86,12 +84,10 @@ function createUserContentWithFunctionResponseFix(
     if (allFunctionResponses) {
       // This is already a properly formatted array of function response Parts
       // Just use them directly without any wrapping
-      if (process.env.DEBUG) {
-        console.log(
-          '[DEBUG] createUserContentWithFunctionResponseFix - array of functionResponse Parts, using directly:',
-          JSON.stringify(message, null, 2),
-        );
-      }
+      geminiChatLogger.debug(
+        () =>
+          `createUserContentWithFunctionResponseFix - array of functionResponse Parts, using directly: ${JSON.stringify(message, null, 2)}`,
+      );
       // Cast is safe here because we've checked all items are objects with functionResponse
       parts.push(...(message as Part[]));
     } else {
@@ -101,12 +97,10 @@ function createUserContentWithFunctionResponseFix(
           parts.push({ text: item });
         } else if (Array.isArray(item)) {
           // Nested array case - flatten it
-          if (process.env.DEBUG) {
-            console.log(
-              '[DEBUG] createUserContentWithFunctionResponseFix - flattening nested array:',
-              JSON.stringify(item, null, 2),
-            );
-          }
+          geminiChatLogger.debug(
+            () =>
+              `createUserContentWithFunctionResponseFix - flattening nested array: ${JSON.stringify(item, null, 2)}`,
+          );
           for (const subItem of item) {
             parts.push(subItem);
           }
@@ -126,16 +120,14 @@ function createUserContentWithFunctionResponseFix(
     parts,
   };
 
-  if (process.env.DEBUG) {
-    console.log(
-      '[DEBUG] createUserContentWithFunctionResponseFix - result parts count:',
-      parts.length,
-    );
-    console.log(
-      '[DEBUG] createUserContentWithFunctionResponseFix - result:',
-      JSON.stringify(result, null, 2),
-    );
-  }
+  geminiChatLogger.debug(
+    () =>
+      `createUserContentWithFunctionResponseFix - result parts count: ${parts.length}`,
+  );
+  geminiChatLogger.debug(
+    () =>
+      `createUserContentWithFunctionResponseFix - result: ${JSON.stringify(result, null, 2)}`,
+  );
 
   return result;
 }
@@ -482,34 +474,46 @@ export class GeminiChat {
           `[sendMessage] Found ${orphanedCalls.length} orphaned tool call(s), inserting synthetic responses`,
       );
 
-      // Sort by messageIndex DESCENDING to insert back-to-front
-      orphanedCalls.sort((a, b) => b.messageIndex - a.messageIndex);
+      // Group orphaned calls by messageIndex to handle parallel calls correctly
+      const orphansByMessage = new Map<number, typeof orphanedCalls>();
+      for (const orphan of orphanedCalls) {
+        if (!orphansByMessage.has(orphan.messageIndex)) {
+          orphansByMessage.set(orphan.messageIndex, []);
+        }
+        orphansByMessage.get(orphan.messageIndex)!.push(orphan);
+      }
+
+      // Sort message indices DESCENDING to insert back-to-front
+      const sortedMessageIndices = Array.from(orphansByMessage.keys()).sort(
+        (a, b) => b - a,
+      );
 
       // Insert synthetic responses back-to-front (so indices don't shift)
-      for (const orphan of orphanedCalls) {
+      for (const messageIndex of sortedMessageIndices) {
+        const orphansAtIndex = orphansByMessage.get(messageIndex)!;
+
         this.logger.debug(
           () =>
-            `  - Fixing orphan: ID=${orphan.id}, Name=${orphan.name}, Index=${orphan.messageIndex}`,
+            `  - Fixing ${orphansAtIndex.length} orphaned calls at message ${messageIndex}`,
         );
 
+        // Create a single response with multiple parts for parallel calls
         const syntheticResponse: Content = {
           role: 'user',
-          parts: [
-            {
-              functionResponse: {
-                id: orphan.id,
-                name: orphan.name,
-                response: {
-                  error:
-                    '[Operation Cancelled] Tool call was interrupted by user',
-                },
+          parts: orphansAtIndex.map((orphan) => ({
+            functionResponse: {
+              id: orphan.id,
+              name: orphan.name,
+              response: {
+                error:
+                  '[Operation Cancelled] Tool call was interrupted by user',
               },
             },
-          ],
+          })),
         };
 
-        // Insert RIGHT AFTER the model message with the orphaned call
-        requestContents.splice(orphan.messageIndex + 1, 0, syntheticResponse);
+        // Insert RIGHT AFTER the model message with the orphaned calls
+        requestContents.splice(messageIndex + 1, 0, syntheticResponse);
       }
 
       // Also update the actual history to make this permanent
@@ -637,38 +641,15 @@ export class GeminiChat {
     params: SendMessageParameters,
     prompt_id: string,
   ): Promise<AsyncGenerator<GenerateContentResponse>> {
-    if (process.env.DEBUG) {
-      console.log('DEBUG [geminiChat]: ===== SEND MESSAGE STREAM START =====');
-      console.log(
-        'DEBUG [geminiChat]: Model from config:',
-        this.config.getModel(),
-      );
-      console.log(
-        'DEBUG [geminiChat]: Params:',
-        JSON.stringify(params, null, 2),
-      );
-      console.log('DEBUG [geminiChat]: Message type:', typeof params.message);
-      console.log(
-        'DEBUG [geminiChat]: Message content:',
-        JSON.stringify(params.message, null, 2),
-      );
-    }
-
-    if (process.env.DEBUG) {
-      console.log('DEBUG: GeminiChat.sendMessageStream called');
-      console.log(
-        'DEBUG: GeminiChat.sendMessageStream params:',
-        JSON.stringify(params, null, 2),
-      );
-      console.log(
-        'DEBUG: GeminiChat.sendMessageStream params.message type:',
-        typeof params.message,
-      );
-      console.log(
-        'DEBUG: GeminiChat.sendMessageStream params.message:',
-        JSON.stringify(params.message, null, 2),
-      );
-    }
+    geminiChatLogger.debug(() => '===== SEND MESSAGE STREAM START =====');
+    geminiChatLogger.debug(
+      () => `Model from config: ${this.config.getModel()}`,
+    );
+    geminiChatLogger.debug(() => `Params: ${JSON.stringify(params, null, 2)}`);
+    geminiChatLogger.debug(() => `Message type: ${typeof params.message}`);
+    geminiChatLogger.debug(
+      () => `Message content: ${JSON.stringify(params.message, null, 2)}`,
+    );
     await this.sendPromise;
 
     let streamDoneResolver: () => void;
@@ -694,9 +675,119 @@ export class GeminiChat {
     // Don't use curated history - it filters out model messages with only tool calls
     const requestContents = this.getHistory(false);
 
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-    return (async function* () {
+    // Fix orphaned tool calls (streaming version) - same logic as non-streaming
+    const toolCalls = new Map<string, { name: string; messageIndex: number }>();
+    const toolResponses = new Set<string>();
+
+    // Scan BACKWARDS from the end until we find a tool response (then stop)
+    let foundToolResponse = false;
+    for (
+      let idx = requestContents.length - 1;
+      idx >= 0 && !foundToolResponse;
+      idx--
+    ) {
+      const content = requestContents[idx];
+
+      // Check for tool responses in user messages
+      if (content.role === 'user' && content.parts) {
+        for (const part of content.parts) {
+          if ('functionResponse' in part && part.functionResponse) {
+            const responseId = (part.functionResponse as { id?: string }).id;
+            if (responseId) {
+              toolResponses.add(responseId);
+              foundToolResponse = true; // Stop scanning - everything before this is already paired
+            }
+          }
+        }
+      }
+
+      // Track tool calls in model messages (only if we haven't found a response yet)
+      if (!foundToolResponse && content.role === 'model' && content.parts) {
+        for (const part of content.parts) {
+          if ('functionCall' in part && part.functionCall?.id) {
+            toolCalls.set(part.functionCall.id, {
+              name: part.functionCall.name || 'unknown',
+              messageIndex: idx,
+            });
+          }
+        }
+      }
+    }
+
+    // Find orphaned calls (tool calls without matching responses)
+    const orphanedCalls: Array<{
+      id: string;
+      name: string;
+      messageIndex: number;
+    }> = [];
+    for (const [id, info] of toolCalls) {
+      if (!toolResponses.has(id)) {
+        orphanedCalls.push({
+          id,
+          name: info.name,
+          messageIndex: info.messageIndex,
+        });
+      }
+    }
+
+    if (orphanedCalls.length > 0) {
+      this.logger.debug(
+        () =>
+          `[sendMessageStream] Found ${orphanedCalls.length} orphaned tool call(s), inserting synthetic responses`,
+      );
+
+      // Group orphaned calls by messageIndex to handle parallel calls correctly
+      const orphansByMessage = new Map<number, typeof orphanedCalls>();
+      for (const orphan of orphanedCalls) {
+        if (!orphansByMessage.has(orphan.messageIndex)) {
+          orphansByMessage.set(orphan.messageIndex, []);
+        }
+        orphansByMessage.get(orphan.messageIndex)!.push(orphan);
+      }
+
+      // Sort message indices DESCENDING to insert back-to-front
+      const sortedMessageIndices = Array.from(orphansByMessage.keys()).sort(
+        (a, b) => b - a,
+      );
+
+      // Insert synthetic responses back-to-front (so indices don't shift)
+      for (const messageIndex of sortedMessageIndices) {
+        const orphansAtIndex = orphansByMessage.get(messageIndex)!;
+
+        this.logger.debug(
+          () =>
+            `  - Fixing ${orphansAtIndex.length} orphaned calls at message ${messageIndex}`,
+        );
+
+        // Create a single response with multiple parts for parallel calls
+        const syntheticResponse: Content = {
+          role: 'user',
+          parts: orphansAtIndex.map((orphan) => ({
+            functionResponse: {
+              id: orphan.id,
+              name: orphan.name,
+              response: {
+                error:
+                  '[Operation Cancelled] Tool call was interrupted by user',
+              },
+            },
+          })),
+        };
+
+        // Insert RIGHT AFTER the model message with the orphaned calls
+        requestContents.splice(messageIndex + 1, 0, syntheticResponse);
+      }
+
+      this.logger.debug(
+        () =>
+          `[sendMessageStream] Fixed ${orphanedCalls.length} orphaned tool calls in history`,
+      );
+    }
+
+    // Use arrow function to preserve 'this' context
+    const streamGenerator = async function* (
+      this: GeminiChat,
+    ): AsyncGenerator<GenerateContentResponse> {
       try {
         let lastError: unknown = new Error('Request failed after all retries.');
 
@@ -706,7 +797,7 @@ export class GeminiChat {
           attempt++
         ) {
           try {
-            const stream = await self.makeApiCallAndProcessStream(
+            const stream = await this.makeApiCallAndProcessStream(
               requestContents,
               params,
               prompt_id,
@@ -749,10 +840,12 @@ export class GeminiChat {
       } finally {
         streamDoneResolver!();
       }
-    })();
+    }.bind(this);
+
+    return streamGenerator();
   }
 
-  private async makeApiCallAndProcessStream(
+  async makeApiCallAndProcessStream(
     requestContents: Content[],
     params: SendMessageParameters,
     prompt_id: string,
@@ -976,9 +1069,18 @@ export class GeminiChat {
         invalidChunkCount === totalChunkCount ||
         modelResponseParts.length === 0
       ) {
-        throw new EmptyStreamError(
-          'Model stream was invalid or completed without valid content.',
+        // Log but don't throw - some models send empty streams as a valid completion signal
+        // especially after tool calls or when they have nothing more to add
+        this.logger.debug(
+          () =>
+            `Stream completed without content (${totalChunkCount} chunks, ${invalidChunkCount} invalid). This may be normal model behavior.`,
         );
+        // Create an empty model response to maintain conversation flow
+        const emptyOutput: Content[] = [
+          { role: 'model', parts: [{ text: '' }] },
+        ];
+        this.recordHistory(userInput, emptyOutput);
+        return; // Exit gracefully without throwing
       }
     }
 

@@ -142,6 +142,7 @@ export class AnthropicProvider extends BaseProvider {
 
   /**
    * Transform a tool ID to Anthropic's expected format (toolu_ prefix)
+   * CRITICAL: This transformation must be consistent and reversible
    */
   private transformToolId(id: string): string {
     if (!id) {
@@ -153,8 +154,9 @@ export class AnthropicProvider extends BaseProvider {
       return id;
     }
 
-    // Replace any existing prefix with toolu_
-    const baseId = id.replace(/^(call_|toolu_)/, '');
+    // For IDs that come from our system, add the prefix
+    // Remove any other prefixes first to avoid double-prefixing
+    const baseId = id.replace(/^(call_|tool_|toolu_)/, '');
     return `toolu_${baseId}`;
   }
 
@@ -411,17 +413,21 @@ ${systemMessage}`;
             // Text was already streamed, so we only need to send tool calls
             const toolCallsOnly = {
               content: completeResponse.content?.filter(
-                (block: { type: string }) => block.type === 'tool_use'
-              )
+                (block: { type: string }) => block.type === 'tool_use',
+              ),
             };
-            
+
             // Only yield if there are actually tool calls after filtering
             if (toolCallsOnly.content && toolCallsOnly.content.length > 0) {
               const convertedResponse =
                 this.converter.fromProviderFormat(toolCallsOnly);
               yield convertedResponse;
             }
-          } else if (!hasStreamedText && completeResponse.content && completeResponse.content.length > 0) {
+          } else if (
+            !hasStreamedText &&
+            completeResponse.content &&
+            completeResponse.content.length > 0
+          ) {
             // No text was streamed and no tool calls, yield the complete response
             const convertedResponse =
               this.converter.fromProviderFormat(completeResponse);
@@ -839,6 +845,11 @@ ${systemMessage}`;
           >;
     }> = [];
 
+    // Track which tool IDs have already been responded to
+    // This prevents duplicate tool_result blocks with the same ID
+    // which Anthropic's API rejects with: "each tool_use must have a single result"
+    const respondedToolIds = new Set<string>();
+
     for (let i = 0; i < contents.length; i++) {
       const content = contents[i];
       if (!content.role || content.role === 'system' || !content.parts)
@@ -903,6 +914,16 @@ ${systemMessage}`;
           }
           // Transform the ID to Anthropic format
           const toolUseId = this.transformToolId(part.functionResponse.id);
+
+          // Skip if we already emitted a tool_result for this ID
+          // This happens when conversation history is replayed (retries, resubmissions)
+          if (respondedToolIds.has(toolUseId)) {
+            this.logger.debug(
+              () => `Skipping duplicate tool_result for ${toolUseId}`,
+            );
+            continue;
+          }
+          respondedToolIds.add(toolUseId);
 
           contentBlocks.push({
             type: 'tool_result',

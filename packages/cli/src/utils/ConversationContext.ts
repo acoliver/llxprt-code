@@ -15,6 +15,9 @@
  */
 
 import { randomBytes } from 'crypto';
+import { DebugLogger } from '@vybestack/llxprt-code-core';
+
+const logger = new DebugLogger('llxprt:cli:conversationContext');
 
 export interface IConversationContext {
   conversationId?: string;
@@ -43,11 +46,9 @@ class ConversationContextManager {
       conversationId: this.generateConversationId(),
       parentId: undefined,
     };
-    if (process.env.DEBUG) {
-      console.log(
-        `[ConversationContext] Started new conversation: ${this.context.conversationId}`,
-      );
-    }
+    logger.debug(
+      () => `Started new conversation: ${this.context.conversationId}`,
+    );
   }
 
   /**
@@ -68,9 +69,7 @@ class ConversationContextManager {
   setParentId(newParentId: string): void {
     if (this.context.conversationId) {
       this.context.parentId = newParentId;
-      if (process.env.DEBUG) {
-        console.log(`[ConversationContext] Set parentId to: ${newParentId}`);
-      }
+      logger.debug(() => `Set parentId to: ${newParentId}`);
     } else {
       console.warn(
         '[ConversationContext] Cannot set parentId without an active conversation.',
@@ -84,11 +83,10 @@ class ConversationContextManager {
    */
   setContext(newContext: IConversationContext): void {
     this.context = newContext;
-    if (process.env.DEBUG) {
-      console.log(
-        `[ConversationContext] Restored context: convId=${newContext.conversationId}, parentId=${newContext.parentId}`,
-      );
-    }
+    logger.debug(
+      () =>
+        `Restored context: convId=${newContext.conversationId}, parentId=${newContext.parentId}`,
+    );
   }
 
   /**

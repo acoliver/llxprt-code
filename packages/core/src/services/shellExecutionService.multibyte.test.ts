@@ -103,7 +103,7 @@ describe('ShellExecutionService multibyte', () => {
     });
 
     const result = await resultPromise;
-    console.log('DEBUG: result is', result);
+    // Debug: result is captured
     expect(result).toBeDefined();
     expect(result.stdout).toContain('ありがとう 世界');
   });

@@ -48,6 +48,8 @@ import { ComplexityAnalyzer } from '../services/complexity-analyzer.js';
 import { TodoReminderService } from '../services/todo-reminder-service.js';
 import { DebugLogger } from '../debug/index.js';
 
+const logger = new DebugLogger('llxprt:core:client');
+
 function isThinkingSupported(model: string) {
   if (model.startsWith('gemini-2.5')) return true;
   return false;
@@ -415,9 +417,7 @@ export class GeminiClient {
     try {
       const userMemory = this.config.getUserMemory();
       const model = this.config.getModel();
-      if (process.env.DEBUG) {
-        console.log('DEBUG [client.startChat]: Model from config:', model);
-      }
+      logger.debug(() => `startChat: Model from config: ${model}`);
       let systemInstruction = await getCoreSystemPromptAsync(userMemory, model);
 
       // Add environment context to system instruction
@@ -427,14 +427,12 @@ export class GeminiClient {
       if (envContextText) {
         systemInstruction = `${envContextText}\n\n${systemInstruction}`;
       }
-      if (process.env.DEBUG) {
-        console.log(
-          'DEBUG [client.startChat]: System instruction includes Flash instructions:',
-          systemInstruction.includes(
+      logger.debug(
+        () =>
+          `startChat: System instruction includes Flash instructions: ${systemInstruction.includes(
             'IMPORTANT: You MUST use the provided tools',
-          ),
-        );
-      }
+          )}`,
+      );
 
       const generateContentConfigWithThinking = isThinkingSupported(
         this.config.getModel(),
@@ -642,21 +640,18 @@ export class GeminiClient {
     turns: number = this.MAX_TURNS,
     originalModel?: string,
   ): AsyncGenerator<ServerGeminiStreamEvent, Turn> {
-    if (process.env.DEBUG) {
-      console.log('DEBUG: GeminiClient.sendMessageStream called');
-      console.log(
-        'DEBUG: GeminiClient.sendMessageStream request:',
-        JSON.stringify(request, null, 2),
-      );
-      console.log(
-        'DEBUG: GeminiClient.sendMessageStream typeof request:',
-        typeof request,
-      );
-      console.log(
-        'DEBUG: GeminiClient.sendMessageStream Array.isArray(request):',
-        Array.isArray(request),
-      );
-    }
+    logger.debug(() => 'GeminiClient.sendMessageStream called');
+    logger.debug(
+      () =>
+        `GeminiClient.sendMessageStream request: ${JSON.stringify(request, null, 2)}`,
+    );
+    logger.debug(
+      () => `GeminiClient.sendMessageStream typeof request: ${typeof request}`,
+    );
+    logger.debug(
+      () =>
+        `GeminiClient.sendMessageStream Array.isArray(request): ${Array.isArray(request)}`,
+    );
     await this.lazyInitialize();
 
     if (this.lastPromptId !== prompt_id) {
@@ -673,7 +668,20 @@ export class GeminiClient {
       const providerManager = contentGenConfig?.providerManager;
       const providerName =
         providerManager?.getActiveProviderName() || 'backend';
-      return new Turn(this.getChat(), prompt_id, providerName);
+
+      // Get HistoryService from chat for early return case
+      const chat = this.getChat();
+      const historyService =
+        typeof chat.getHistoryService === 'function'
+          ? chat.getHistoryService()
+          : undefined;
+      const conversationId = `chat_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+
+      return new Turn(chat, prompt_id, providerName, historyService, {
+        conversationId,
+        messageId,
+      });
     }
     // Ensure turns never exceeds MAX_TURNS to prevent infinite loops
     const boundedTurns = Math.min(turns, this.MAX_TURNS);
@@ -682,7 +690,20 @@ export class GeminiClient {
       const providerManager = contentGenConfig?.providerManager;
       const providerName =
         providerManager?.getActiveProviderName() || 'backend';
-      return new Turn(this.getChat(), prompt_id, providerName);
+
+      // Get HistoryService from chat for early return case
+      const chat = this.getChat();
+      const historyService =
+        typeof chat.getHistoryService === 'function'
+          ? chat.getHistoryService()
+          : undefined;
+      const conversationId = `chat_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+
+      return new Turn(chat, prompt_id, providerName, historyService, {
+        conversationId,
+        messageId,
+      });
     }
 
     // Track the original model from the first call to detect model switching
@@ -765,7 +786,19 @@ export class GeminiClient {
     const providerManager = contentGenConfig?.providerManager;
     const providerName = providerManager?.getActiveProviderName() || 'backend';
 
-    const turn = new Turn(this.getChat(), prompt_id, providerName);
+    // Get HistoryService from chat and create Turn with it
+    const chat = this.getChat();
+    const historyService =
+      typeof chat.getHistoryService === 'function'
+        ? chat.getHistoryService()
+        : undefined;
+    const conversationId = `chat_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+
+    const turn = new Turn(chat, prompt_id, providerName, historyService, {
+      conversationId,
+      messageId,
+    });
 
     const loopDetected = await this.loopDetector.turnStarted(signal);
     if (loopDetected) {

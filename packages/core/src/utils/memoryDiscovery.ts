@@ -19,22 +19,9 @@ import {
   DEFAULT_MEMORY_FILE_FILTERING_OPTIONS,
   FileFilteringOptions,
 } from '../config/config.js';
+import { DebugLogger } from '../debug/index.js';
 
-// Simple console logger, similar to the one previously in CLI's config.ts
-// TODO: Integrate with a more robust server-side logger if available/appropriate.
-const logger = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  debug: (...args: any[]) => {
-    if (process.env.DEBUG) {
-      console.debug('[DEBUG] [MemoryDiscovery]', ...args);
-    }
-  },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  warn: (...args: any[]) => console.warn('[WARN] [MemoryDiscovery]', ...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  error: (...args: any[]) =>
-    console.error('[ERROR] [MemoryDiscovery]', ...args),
-};
+const logger = new DebugLogger('llxprt:core:memoryDiscovery');
 
 interface GeminiFileContent {
   filePath: string;
@@ -67,11 +54,13 @@ async function findProjectRoot(startDir: string): Promise<string | null> {
         if (typeof error === 'object' && error !== null && 'code' in error) {
           const fsError = error as { code: string; message: string };
           logger.warn(
-            `Error checking for .git directory at ${gitPath}: ${fsError.message}`,
+            () =>
+              `Error checking for .git directory at ${gitPath}: ${fsError.message}`,
           );
         } else {
           logger.warn(
-            `Non-standard error checking for .git directory at ${gitPath}: ${String(error)}`,
+            () =>
+              `Non-standard error checking for .git directory at ${gitPath}: ${String(error)}`,
           );
         }
       }
@@ -140,7 +129,8 @@ async function getGeminiMdFilePathsInternalForEachDir(
       allPaths.add(globalMemoryPath);
       if (debugMode)
         logger.debug(
-          `Found readable global ${geminiMdFilename}: ${globalMemoryPath}`,
+          () =>
+            `Found readable global ${geminiMdFilename}: ${globalMemoryPath}`,
         );
     } catch {
       // It's okay if it's not found.
@@ -152,12 +142,13 @@ async function getGeminiMdFilePathsInternalForEachDir(
       const resolvedCwd = path.resolve(dir);
       if (debugMode)
         logger.debug(
-          `Searching for ${geminiMdFilename} starting from CWD: ${resolvedCwd}`,
+          () =>
+            `Searching for ${geminiMdFilename} starting from CWD: ${resolvedCwd}`,
         );
 
       const projectRoot = await findProjectRoot(resolvedCwd);
       if (debugMode)
-        logger.debug(`Determined project root: ${projectRoot ?? 'None'}`);
+        logger.debug(() => `Determined project root: ${projectRoot ?? 'None'}`);
 
       const upwardPaths: string[] = [];
       let currentDir = resolvedCwd;
@@ -169,7 +160,8 @@ async function getGeminiMdFilePathsInternalForEachDir(
         // Loop until filesystem root or currentDir is empty
         if (debugMode) {
           logger.debug(
-            `Checking for ${geminiMdFilename} in (upward scan): ${currentDir}`,
+            () =>
+              `Checking for ${geminiMdFilename} in (upward scan): ${currentDir}`,
           );
         }
 
@@ -178,7 +170,8 @@ async function getGeminiMdFilePathsInternalForEachDir(
         if (currentDir === path.join(resolvedHome, LLXPRT_CONFIG_DIR)) {
           if (debugMode) {
             logger.debug(
-              `Upward scan reached global config dir path, stopping upward search here: ${currentDir}`,
+              () =>
+                `Upward scan reached global config dir path, stopping upward search here: ${currentDir}`,
             );
           }
           break;
@@ -230,9 +223,8 @@ async function getGeminiMdFilePathsInternalForEachDir(
 
   if (debugMode)
     logger.debug(
-      `Final ordered ${getAllLlxprtMdFilenames()} paths to read: ${JSON.stringify(
-        finalPaths,
-      )}`,
+      () =>
+        `Final ordered ${getAllLlxprtMdFilenames()} paths to read: ${JSON.stringify(finalPaths)}`,
     );
   return finalPaths;
 }
@@ -260,18 +252,20 @@ async function readGeminiMdFiles(
       results.push({ filePath, content: processedResult.content });
       if (debugMode)
         logger.debug(
-          `Successfully read and processed imports: ${filePath} (Length: ${processedResult.content.length})`,
+          () =>
+            `Successfully read and processed imports: ${filePath} (Length: ${processedResult.content.length})`,
         );
     } catch (error: unknown) {
       const isTestEnv = process.env.NODE_ENV === 'test' || process.env.VITEST;
       if (!isTestEnv) {
         const message = error instanceof Error ? error.message : String(error);
         logger.warn(
-          `Warning: Could not read ${getAllLlxprtMdFilenames()} file at ${filePath}. Error: ${message}`,
+          () =>
+            `Warning: Could not read ${getAllLlxprtMdFilenames()} file at ${filePath}. Error: ${message}`,
         );
       }
       results.push({ filePath, content: null }); // Still include it with null content
-      if (debugMode) logger.debug(`Failed to read: ${filePath}`);
+      if (debugMode) logger.debug(() => `Failed to read: ${filePath}`);
     }
   }
   return results;
@@ -314,7 +308,8 @@ export async function loadServerHierarchicalMemory(
 ): Promise<{ memoryContent: string; fileCount: number }> {
   if (debugMode)
     logger.debug(
-      `Loading server hierarchical memory for CWD: ${currentWorkingDirectory} (importFormat: ${importFormat})`,
+      () =>
+        `Loading server hierarchical memory for CWD: ${currentWorkingDirectory} (importFormat: ${importFormat})`,
     );
 
   // For the server, homedir() refers to the server process's home.
@@ -332,7 +327,9 @@ export async function loadServerHierarchicalMemory(
   );
   if (filePaths.length === 0) {
     if (debugMode)
-      logger.debug('No LLXPRT.md files found in hierarchy of the workspace.');
+      logger.debug(
+        () => 'No LLXPRT.md files found in hierarchy of the workspace.',
+      );
     return { memoryContent: '', fileCount: 0 };
   }
   const contentsWithPaths = await readGeminiMdFiles(
@@ -347,11 +344,12 @@ export async function loadServerHierarchicalMemory(
   );
   if (debugMode)
     logger.debug(
-      `Combined instructions length: ${combinedInstructions.length}`,
+      () => `Combined instructions length: ${combinedInstructions.length}`,
     );
   if (debugMode && combinedInstructions.length > 0)
     logger.debug(
-      `Combined instructions (snippet): ${combinedInstructions.substring(0, 500)}...`,
+      () =>
+        `Combined instructions (snippet): ${combinedInstructions.substring(0, 500)}...`,
     );
   return {
     memoryContent: combinedInstructions,

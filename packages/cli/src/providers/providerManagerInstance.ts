@@ -12,6 +12,7 @@ import {
   GeminiProvider,
   sanitizeForByteString,
   needsSanitization,
+  DebugLogger,
 } from '@vybestack/llxprt-code-core';
 import { IFileSystem, NodeFileSystem } from './IFileSystem.js';
 import {
@@ -25,6 +26,8 @@ import { MultiProviderTokenStore } from '../auth/types.js';
 import { GeminiOAuthProvider } from '../auth/gemini-oauth-provider.js';
 import { QwenOAuthProvider } from '../auth/qwen-oauth-provider.js';
 import { AnthropicOAuthProvider } from '../auth/anthropic-oauth-provider.js';
+
+const logger = new DebugLogger('llxprt:cli:providerManager');
 
 /**
  * Sanitizes API keys to remove problematic characters that cause ByteString errors.
@@ -140,12 +143,10 @@ export function getProviderManager(
     }
 
     const openaiBaseUrl = process.env.OPENAI_BASE_URL;
-    if (process.env.DEBUG || process.env.VERBOSE) {
-      console.log('[ProviderManager] Initializing OpenAI provider with:', {
-        hasApiKey: !!openaiApiKey,
-        baseUrl: openaiBaseUrl || 'default',
-      });
-    }
+    logger.debug(
+      () =>
+        `Initializing OpenAI provider with: hasApiKey=${!!openaiApiKey}, baseUrl=${openaiBaseUrl || 'default'}`,
+    );
     // Create provider config from loaded settings
     const settingsData = loadedSettings?.merged || {};
     const openaiProviderConfig = {

@@ -41,6 +41,23 @@ export interface OpenAIResponse {
 
 export class OpenAIContentConverter implements IContentConverter {
   toProviderFormat(contents: Content[]): OpenAIMessage[] {
+    // Log input for debugging
+    console.debug(
+      `[OpenAIContentConverter] Converting ${contents.length} Gemini contents to OpenAI format`,
+    );
+    contents.forEach((content, idx) => {
+      const partTypes =
+        content.parts
+          ?.map((p) => {
+            if ('text' in p) return 'text';
+            if ('functionCall' in p) return 'functionCall';
+            if ('functionResponse' in p) return 'functionResponse';
+            return 'unknown';
+          })
+          .join(',') || 'no-parts';
+      console.debug(`  [${idx}] ${content.role}: ${partTypes}`);
+    });
+
     // Pseudocode line 13: INITIALIZE messages as empty array
     const messages: OpenAIMessage[] = [];
     // Pseudocode line 14: INITIALIZE pendingToolCalls
@@ -162,6 +179,19 @@ export class OpenAIContentConverter implements IContentConverter {
 
     // Don't fix orphaned tool responses here - handled centrally in useGeminiStream
     // const fixedMessages = this.fixOrphanedToolResponses(messages);
+
+    // Log output for debugging
+    console.debug(
+      `[OpenAIContentConverter] Converted to ${messages.length} OpenAI messages`,
+    );
+    messages.forEach((msg, idx) => {
+      let details = msg.role;
+      if (msg.tool_call_id) details += ` (tool_response: ${msg.tool_call_id})`;
+      if (msg.tool_calls) details += ` (${msg.tool_calls.length} tool_calls)`;
+      if (msg.content && msg.role === 'system')
+        details += ` (length: ${msg.content.length})`;
+      console.debug(`  [${idx}] ${details}`);
+    });
 
     // Pseudocode line 52: RETURN messages
     return messages;

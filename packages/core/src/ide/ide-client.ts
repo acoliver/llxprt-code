@@ -21,13 +21,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EnvHttpProxyAgent } from 'undici';
+import { DebugLogger } from '../debug/index.js';
 
-const logger = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  debug: (...args: any[]) => console.debug('[DEBUG] [IDEClient]', ...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  error: (...args: any[]) => console.error('[ERROR] [IDEClient]', ...args),
-};
+const logger = new DebugLogger('llxprt:ide:client');
 
 export type IDEConnectionState = {
   status: IDEConnectionStatus;

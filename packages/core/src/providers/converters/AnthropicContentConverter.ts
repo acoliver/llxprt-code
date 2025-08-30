@@ -5,6 +5,7 @@
  */
 import { Content, Part, FunctionCall } from '@google/genai';
 import { IContentConverter } from './IContentConverter.js';
+import { ToolIdGenerator } from '../../utils/toolIdGenerator.js';
 
 // Anthropic message format types
 export interface AnthropicMessage {
@@ -27,7 +28,13 @@ export interface AnthropicResponse {
 }
 
 export class AnthropicContentConverter implements IContentConverter {
+  // Track tool IDs to prevent duplicates
+  private processedToolIds = new Set<string>();
+
   toProviderFormat(contents: Content[]): AnthropicMessage[] {
+    // Clear processed IDs for each new conversion
+    this.processedToolIds.clear();
+
     // Pseudocode line 83: INITIALIZE messages as empty array
     const messages: AnthropicMessage[] = [];
     // Pseudocode line 84: INITIALIZE lastRole as null
@@ -70,9 +77,27 @@ export class AnthropicContentConverter implements IContentConverter {
           // Pseudocode line 103: CREATE tool_use block
           // CRITICAL: Preserve the existing ID from the functionCall if it exists
           // This ensures tool_use and tool_result IDs match
+          const toolId = ToolIdGenerator.ensureId(
+            part.functionCall.id,
+            'toolu',
+          );
+          const transformedId = ToolIdGenerator.transformId(
+            toolId,
+            'anthropic',
+          );
+
+          // Check for duplicate tool IDs
+          if (this.processedToolIds.has(transformedId)) {
+            console.warn(
+              `Duplicate tool ID detected: ${transformedId}, skipping`,
+            );
+            continue;
+          }
+          this.processedToolIds.add(transformedId);
+
           const toolUse: AnthropicContent = {
             type: 'tool_use',
-            id: part.functionCall.id || this.generateToolId(),
+            id: transformedId,
             name: part.functionCall.name,
             input: part.functionCall.args,
           };
@@ -87,10 +112,26 @@ export class AnthropicContentConverter implements IContentConverter {
             throw new Error('Function response ID is required but missing');
           }
 
+          // Transform to Anthropic format to ensure consistency
+          const transformedId = ToolIdGenerator.transformId(
+            responseId,
+            'anthropic',
+          );
+
+          // Check if we've already processed a response for this tool
+          const responseKey = `response_${transformedId}`;
+          if (this.processedToolIds.has(responseKey)) {
+            console.warn(
+              `Duplicate tool response detected for ID: ${transformedId}, skipping`,
+            );
+            continue;
+          }
+          this.processedToolIds.add(responseKey);
+
           // Pseudocode line 106: CREATE tool_result block with existing ID
           const toolResult: AnthropicContent = {
             type: 'tool_result',
-            tool_use_id: responseId,
+            tool_use_id: transformedId,
             content: part.functionResponse.response,
           };
           // Pseudocode line 107: APPEND tool_result to currentMessage.content
@@ -126,8 +167,10 @@ export class AnthropicContentConverter implements IContentConverter {
         // Pseudocode line 126-128: ELSE IF block.type equals "tool_use"
         else if (block.type === 'tool_use') {
           // Pseudocode line 127: CREATE functionCall part with ID
+          // CRITICAL: The ID from Anthropic has toolu_ prefix, and we MUST preserve it
+          // exactly as-is so that tool_result blocks can reference the same ID
           const functionCall: FunctionCall = {
-            id: block.id, // PRESERVE THE ID FROM ANTHROPIC!
+            id: block.id, // PRESERVE THE EXACT ID FROM ANTHROPIC INCLUDING PREFIX!
             name: block.name!,
             args: block.input as Record<string, unknown>,
           };
@@ -166,9 +209,5 @@ export class AnthropicContentConverter implements IContentConverter {
       }
     }
     message.content.push(content);
-  }
-
-  private generateToolId(): string {
-    return `tool_${Math.random().toString(36).substring(2, 15)}`;
   }
 }
