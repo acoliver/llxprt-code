@@ -1313,7 +1313,21 @@ export class GeminiChat {
   private extractContentText(content: Content): string {
     if (typeof content === 'string') return content;
     if (content.parts) {
-      return content.parts.map((p) => p.text || '').join(' ');
+      return (
+        content.parts
+          .map((p) => {
+            if ('text' in p) return p.text || '';
+            if ('functionCall' in p && p.functionCall) {
+              return `[TOOL_CALL: ${p.functionCall.name}]`;
+            }
+            if ('functionResponse' in p && p.functionResponse) {
+              return `[TOOL_RESPONSE: ${p.functionResponse.name}]`;
+            }
+            return '';
+          })
+          .join(' ')
+          .trim() || '[EMPTY_CONTENT]'
+      ); // Ensure we never return empty string
     }
     return JSON.stringify(content);
   }

@@ -224,7 +224,7 @@ describe('AnthropicProvider', () => {
       expect(chunks).toEqual([
         { role: 'model', parts: [{ text: 'Hello' }] },
         { role: 'model', parts: [{ text: ' world' }] },
-        { role: 'model', parts: [{ text: 'Hello world' }] },
+        // Final complete response is not yielded when text was streamed (to avoid duplicates)
       ]);
 
       expect(mockAnthropicInstance.messages.create).toHaveBeenCalledWith({
@@ -488,7 +488,7 @@ describe('AnthropicProvider', () => {
 
       expect(chunks).toEqual([
         { role: 'model', parts: [{ text: 'Success' }] },
-        { role: 'model', parts: [{ text: 'Success' }] },
+        // Final complete response is not yielded when text was streamed (to avoid duplicates)
       ]);
 
       // Should have been called twice (first failed, second succeeded)
@@ -539,7 +539,7 @@ describe('AnthropicProvider', () => {
 
       expect(chunks).toEqual([
         { role: 'model', parts: [{ text: 'Fixed and working' }] },
-        { role: 'model', parts: [{ text: 'Fixed and working' }] },
+        // Final complete response is not yielded when text was streamed (to avoid duplicates)
       ]);
 
       // Should have been called twice (first failed, second succeeded)

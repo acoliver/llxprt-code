@@ -630,6 +630,37 @@ export const useGeminiStream = (
         DEFAULT_GEMINI_FLASH_MODEL,
       );
 
+      // Check if this is a tool validation error that should allow retry
+      // These errors indicate the model attempted a tool call with incorrect parameters
+      const isToolValidationError = 
+        errorText.includes('Tool call validation failed') ||
+        errorText.includes('tool call validation failed') ||
+        errorText.includes('parameters for tool') ||
+        errorText.includes('did not match schema') ||
+        errorText.includes('missing properties') ||
+        errorText.includes('invalid tool params') ||
+        errorText.includes('INVALID_TOOL_PARAMS');
+
+      if (isToolValidationError) {
+        // For tool validation errors, add the error message and allow the model to retry
+        // The error message will serve as feedback for the model to correct its parameters
+        addItem(
+          {
+            type: MessageType.ERROR,
+            text: errorText,
+          },
+          userMessageTimestamp,
+        );
+        
+        // Store error for retry after submitQuery is defined
+        // This will be processed in a useEffect after all hooks are initialized
+        queuedSystemFeedbackRef.current.push(
+          `The previous tool call failed with a validation error. Please review the error message above and retry with the correct parameters. The error was: ${errorText}`
+        );
+        
+        return; // Don't process as terminal error
+      }
+
       // Check if this is an authentication error that should trigger onAuthError
       // Match various authentication error patterns from different providers
       // But DON'T trigger if we're in the middle of OAuth flow

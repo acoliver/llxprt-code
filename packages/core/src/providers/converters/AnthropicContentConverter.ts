@@ -68,9 +68,11 @@ export class AnthropicContentConverter implements IContentConverter {
         // Pseudocode line 102-104: ELSE IF part has functionCall
         else if (part.functionCall) {
           // Pseudocode line 103: CREATE tool_use block
+          // CRITICAL: Preserve the existing ID from the functionCall if it exists
+          // This ensures tool_use and tool_result IDs match
           const toolUse: AnthropicContent = {
             type: 'tool_use',
-            id: this.generateToolId(),
+            id: part.functionCall.id || this.generateToolId(),
             name: part.functionCall.name,
             input: part.functionCall.args,
           };

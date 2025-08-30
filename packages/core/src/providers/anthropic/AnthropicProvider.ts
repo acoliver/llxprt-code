@@ -381,6 +381,8 @@ ${systemMessage}`;
 
         // Collect all chunks to build complete response
         const chunks: Anthropic.MessageStreamEvent[] = [];
+        let hasStreamedText = false;
+
         for await (const chunk of stream) {
           chunks.push(chunk);
 
@@ -389,6 +391,7 @@ ${systemMessage}`;
             chunk.type === 'content_block_delta' &&
             chunk.delta.type === 'text_delta'
           ) {
+            hasStreamedText = true;
             yield {
               role: 'model',
               parts: [{ text: chunk.delta.text }],
@@ -399,9 +402,31 @@ ${systemMessage}`;
         // Build complete response from collected chunks
         const completeResponse = this.buildCompleteResponse(chunks);
         if (completeResponse) {
-          const convertedResponse =
-            this.converter.fromProviderFormat(completeResponse);
-          yield convertedResponse;
+          const hasToolCalls = completeResponse.content?.some(
+            (block: { type: string }) => block.type === 'tool_use',
+          );
+
+          if (hasToolCalls) {
+            // Only yield tool calls if we have them
+            // Text was already streamed, so we only need to send tool calls
+            const toolCallsOnly = {
+              content: completeResponse.content?.filter(
+                (block: { type: string }) => block.type === 'tool_use'
+              )
+            };
+            
+            // Only yield if there are actually tool calls after filtering
+            if (toolCallsOnly.content && toolCallsOnly.content.length > 0) {
+              const convertedResponse =
+                this.converter.fromProviderFormat(toolCallsOnly);
+              yield convertedResponse;
+            }
+          } else if (!hasStreamedText && completeResponse.content && completeResponse.content.length > 0) {
+            // No text was streamed and no tool calls, yield the complete response
+            const convertedResponse =
+              this.converter.fromProviderFormat(completeResponse);
+            yield convertedResponse;
+          }
         }
       } else {
         // Handle non-streaming response

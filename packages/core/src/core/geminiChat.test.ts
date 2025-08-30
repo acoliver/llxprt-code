@@ -451,4 +451,187 @@ describe('GeminiChat', () => {
     expect(response.candidates).toBeUndefined();
     expect(response.usageMetadata).toBeUndefined();
   });
+
+  // Bug reproduction: Empty content after tool calls causing HistoryService validation error
+  test('handles model responses with only tool calls (no text content)', async () => {
+    // Arrange: Mock a response that only contains a tool call, no text
+    const toolOnlyResponse: GenerateContentResponse = {
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  name: 'search_web',
+                  args: { query: 'test search' },
+                },
+              },
+            ],
+          },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 10,
+        candidatesTokenCount: 5,
+        totalTokenCount: 15,
+      },
+    };
+
+    vi.mocked(contentGenerator.generateContent).mockResolvedValue(
+      toolOnlyResponse,
+    );
+
+    // Act: User sends message that triggers tool-only response
+    const response = await geminiChat.sendMessage(
+      { message: 'Search for something' },
+      'tool-only-prompt',
+    );
+
+    // Assert: Response should be recorded without throwing validation error
+    expect(response.candidates?.[0]?.content?.parts?.[0]).toHaveProperty(
+      'functionCall',
+    );
+
+    // Verify history was recorded successfully
+    const history = geminiChat.getHistory();
+    expect(history).toHaveLength(2); // user message + model tool call
+    expect(history[1].role).toBe('model');
+    expect(history[1].parts?.[0]).toHaveProperty('functionCall');
+  });
+
+  // Bug reproduction: Empty model response after tool execution
+  test('handles empty model responses after tool execution', async () => {
+    // Arrange: First response is a tool call
+    const toolCallResponse: GenerateContentResponse = {
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  name: 'get_data',
+                  args: { id: '123' },
+                },
+              },
+            ],
+          },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 10,
+        candidatesTokenCount: 5,
+        totalTokenCount: 15,
+      },
+    };
+
+    // Second response after tool execution might be empty or have empty parts
+    const emptyResponse: GenerateContentResponse = {
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: [], // Empty parts array
+          },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 20,
+        candidatesTokenCount: 0,
+        totalTokenCount: 20,
+      },
+    };
+
+    vi.mocked(contentGenerator.generateContent)
+      .mockResolvedValueOnce(toolCallResponse)
+      .mockResolvedValueOnce(emptyResponse);
+
+    // Act: User sends message, gets tool call, then tool response
+    await geminiChat.sendMessage(
+      { message: 'Get data for item 123' },
+      'prompt-1',
+    );
+
+    // Simulate tool execution response
+    const toolResponse = {
+      functionResponse: {
+        name: 'get_data',
+        response: { data: 'item data here' },
+      },
+    };
+
+    // This should not throw even with empty model response
+    await expect(
+      geminiChat.sendMessage({ message: [toolResponse] }, 'prompt-2'),
+    ).resolves.not.toThrow();
+  });
+
+  // Bug reproduction: Model response with parts containing empty text
+  test('handles model responses with empty text parts', async () => {
+    // This replicates the exact scenario where providers return empty text in parts
+    const emptyTextResponse: GenerateContentResponse = {
+      candidates: [
+        {
+          content: {
+            role: 'model',
+            parts: [{ text: '' }], // Empty text part
+          },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 10,
+        candidatesTokenCount: 0,
+        totalTokenCount: 10,
+      },
+    };
+
+    vi.mocked(contentGenerator.generateContent).mockResolvedValue(
+      emptyTextResponse,
+    );
+
+    // Act: Send message that gets empty text response
+    const response = await geminiChat.sendMessage(
+      { message: 'Test' },
+      'empty-text-prompt',
+    );
+
+    // Assert: The response should complete successfully
+    expect(response).toBeDefined();
+
+    // Verify how empty text is stored in history
+    const history = geminiChat.getHistory();
+    expect(history).toHaveLength(2);
+
+    // The model response should have been recorded
+    // Currently it becomes "[UNKNOWN_PART]" due to the extraction logic
+    expect(history[1].role).toBe('model');
+    expect(history[1].parts).toEqual([{ text: '' }]); // Original empty text preserved
+  });
+
+  // Bug reproduction: Empty content after tool responses
+  test('handles empty content when adding tool responses to history', async () => {
+    // This simulates what happens when the user sends a tool response back
+    // The tool response itself might have empty or minimal content
+    const toolResponseContent = {
+      role: 'user',
+      parts: [
+        {
+          functionResponse: {
+            name: 'search',
+            response: '', // Empty response from tool
+          },
+        },
+      ],
+    };
+
+    // When this is extracted, it might become empty or cause issues
+    // Test that addHistory handles this case
+    expect(() => {
+      geminiChat.addHistory(toolResponseContent);
+    }).not.toThrow();
+
+    const history = geminiChat.getHistory();
+    expect(history[history.length - 1].role).toBe('user');
+  });
 });
