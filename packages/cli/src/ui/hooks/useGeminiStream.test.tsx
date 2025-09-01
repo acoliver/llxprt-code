@@ -628,10 +628,8 @@ describe('useGeminiStream', () => {
 
     await waitFor(() => {
       expect(mockMarkToolsAsSubmitted).toHaveBeenCalledWith(['1']);
-      expect(client.addHistory).toHaveBeenCalledWith({
-        role: 'user',
-        parts: [{ text: 'cancelled' }],
-      });
+      // With fixOrphans handling, UI should not add anything to history for cancelled tools
+      expect(client.addHistory).not.toHaveBeenCalled();
       // Ensure we do NOT call back to the API
       expect(mockSendMessageStream).not.toHaveBeenCalled();
     });
@@ -742,17 +740,8 @@ describe('useGeminiStream', () => {
         'cancel-2',
       ]);
 
-      // Crucially, addHistory should be called only ONCE
-      expect(client.addHistory).toHaveBeenCalledTimes(1);
-
-      // And that single call should contain BOTH function responses
-      expect(client.addHistory).toHaveBeenCalledWith({
-        role: 'user',
-        parts: [
-          ...(cancelledToolCall1.response.responseParts as Part[]),
-          ...(cancelledToolCall2.response.responseParts as Part[]),
-        ],
-      });
+      // With fixOrphans handling, UI should not add anything to history for cancelled tools
+      expect(client.addHistory).not.toHaveBeenCalled();
 
       // No message should be sent back to the API for a turn with only cancellations
       expect(mockSendMessageStream).not.toHaveBeenCalled();
@@ -760,9 +749,13 @@ describe('useGeminiStream', () => {
   });
 
   it('should not flicker streaming state to Idle between tool completion and submission', async () => {
-    const toolCallResponseParts: PartListUnion = [
-      { text: 'tool 1 final response' },
-    ];
+    const toolCallResponsePart: Part = {
+      functionResponse: {
+        id: 'call1',
+        name: 'tool1',
+        response: { result: 'tool 1 final response' },
+      },
+    };
 
     const initialToolCalls: TrackedToolCall[] = [
       {
@@ -794,7 +787,7 @@ describe('useGeminiStream', () => {
         status: 'success',
         response: {
           callId: 'call1',
-          responseParts: toolCallResponseParts,
+          responseParts: toolCallResponsePart,
           error: undefined,
           errorType: undefined, // FIX: Added missing property
           resultDisplay: 'Tool 1 success display',
@@ -870,7 +863,7 @@ describe('useGeminiStream', () => {
     // 5. Wait for submitQuery to be called
     await waitFor(() => {
       expect(mockSendMessageStream).toHaveBeenCalledWith(
-        toolCallResponseParts,
+        [toolCallResponsePart],
         expect.any(AbortSignal),
         'prompt-id-4',
       );

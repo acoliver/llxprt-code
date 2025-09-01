@@ -1,0 +1,2898 @@
+/**
+ * Copyright 2025 Vybestack LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * @plan PLAN-20250120-DEBUGLOGGING.P15
+ * @requirement REQ-INT-001.1
+ */
+/**
+ * @plan PLAN-20250113-SIMPLIFICATION.P07
+ * @requirement REQ-003.1
+ * @pseudocode lines 140-163
+ */
+import { DebugLogger } from '../../debug/index.js';
+import { IModel } from '../IModel.js';
+import { ITool } from '../ITool.js';
+import { GemmaToolCallParser } from '../../parsers/TextToolCallParser.js';
+import { retryWithBackoff } from '../../utils/retry.js';
+import { ToolFormatter } from '../../tools/ToolFormatter.js';
+import { ToolFormat } from '../../tools/IToolFormatter.js';
+import OpenAI from 'openai';
+import { IProviderConfig } from '../types/IProviderConfig.js';
+import { RESPONSES_API_MODELS } from './RESPONSES_API_MODELS.js';
+// ConversationCache removed - providers should be stateless
+import { estimateMessagesTokens } from './estimateRemoteTokens.js';
+// ConversationContext removed - using inline conversation ID generation
+import {
+  parseResponsesStream,
+  parseErrorResponse,
+} from './parseResponsesStream.js';
+import { buildResponsesRequest } from './buildResponsesRequest.js';
+import { BaseProvider, BaseProviderConfig } from '../BaseProvider.js';
+import {
+  isQwenEndpoint,
+  generateOAuthEndpointMismatchError,
+} from '../../config/endpoints.js';
+import { OAuthManager } from '../../auth/precedence.js';
+import { getSettingsService } from '../../settings/settingsServiceInstance.js';
+import { Content } from '@google/genai';
+import { OpenAIContentConverter } from '../converters/OpenAIContentConverter.js';
+import type { Message } from '../../services/history/types.js';
+import { OpenAIHistoryAdapter } from './OpenAIHistoryAdapter.js';
+
+/**
+ * Usage metadata that can be attached to Content objects
+ */
+type UsageMetadata = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+/**
+ * Content with usage metadata
+ */
+type ContentWithUsage = Content & {
+  usage?: UsageMetadata;
+};
+
+/**
+ * OpenAI-compatible message format for internal processing
+ */
+type OpenAIMessage = {
+  role: string;
+  content?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+  tool_call_id?: string;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+};
+
+export class OpenAIProvider extends BaseProvider {
+  private logger: DebugLogger;
+  private openai: OpenAI;
+  private currentModel: string = process.env.LLXPRT_DEFAULT_MODEL || 'gpt-5';
+  private baseURL?: string;
+  private providerConfig?: IProviderConfig;
+  private toolFormatter: ToolFormatter;
+  private toolFormatOverride?: ToolFormat;
+  // ConversationCache removed - providers should be stateless
+  private modelParams?: Record<string, unknown>;
+  private _cachedClient?: OpenAI;
+  private _cachedClientKey?: string;
+  private temporarySystemInstruction?: string;
+  /**
+   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   * @requirement REQ-003.1
+   */
+  private converter = new OpenAIContentConverter();
+
+  constructor(
+    apiKey: string | undefined,
+    baseURL?: string,
+    config?: IProviderConfig,
+    oauthManager?: OAuthManager,
+  ) {
+    // Initialize base provider with auth configuration
+    // Check if we should enable OAuth for Qwen
+    // Check OAuth enablement from OAuth manager if available
+    let shouldEnableQwenOAuth = false;
+    if (oauthManager) {
+      // Check if OAuth is enabled for qwen in the OAuth manager (from settings)
+      const manager = oauthManager as OAuthManager & {
+        isOAuthEnabled?(provider: string): boolean;
+      };
+      if (
+        manager.isOAuthEnabled &&
+        typeof manager.isOAuthEnabled === 'function'
+      ) {
+        shouldEnableQwenOAuth = manager.isOAuthEnabled('qwen');
+      }
+
+      // Also enable if this looks like a Qwen endpoint
+      if (!shouldEnableQwenOAuth) {
+        shouldEnableQwenOAuth =
+          isQwenEndpoint(baseURL || '') ||
+          (!baseURL && (!apiKey || apiKey === '')) ||
+          baseURL === 'https://portal.qwen.ai/v1';
+      }
+    }
+
+    const baseConfig: BaseProviderConfig = {
+      name: 'openai',
+      apiKey,
+      baseURL,
+      envKeyNames: ['OPENAI_API_KEY'],
+      isOAuthEnabled: shouldEnableQwenOAuth,
+      oauthProvider: shouldEnableQwenOAuth ? 'qwen' : undefined,
+      oauthManager,
+    };
+
+    super(baseConfig);
+
+    this.logger = new DebugLogger('llxprt:providers:openai');
+    this.logger.debug(
+      () =>
+        `Constructor - baseURL: ${baseURL}, apiKey: ${apiKey?.substring(0, 10) || 'none'}, oauthManager: ${!!oauthManager}, shouldEnableQwenOAuth: ${shouldEnableQwenOAuth}`,
+    );
+    this.baseURL = baseURL;
+    this.providerConfig = config;
+    this.toolFormatter = new ToolFormatter();
+    // ConversationCache removed - providers should be stateless
+
+    // Initialize from SettingsService
+    this.initializeFromSettings().catch((error) => {
+      this.logger.debug(
+        () => `Failed to initialize from SettingsService: ${error}`,
+      );
+    });
+
+    // Set appropriate default model based on the provider
+    if (shouldEnableQwenOAuth || isQwenEndpoint(baseURL || '')) {
+      // Default to Qwen model when using Qwen endpoints
+      this.currentModel = 'qwen3-coder-plus';
+    } else if (process.env.LLXPRT_DEFAULT_MODEL) {
+      // Use environment variable if set
+      this.currentModel = process.env.LLXPRT_DEFAULT_MODEL;
+    }
+
+    const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
+      apiKey: apiKey || 'placeholder', // OpenAI client requires a string, use placeholder if OAuth will be used
+      // Allow browser environment if explicitly configured
+      dangerouslyAllowBrowser: config?.allowBrowserEnvironment || false,
+    };
+    // Only include baseURL if it's defined
+    if (baseURL) {
+      clientOptions.baseURL = baseURL;
+    }
+    this.openai = new OpenAI(clientOptions);
+    this._cachedClientKey = apiKey; // Track the initial key used
+
+    // Cached client reserved for future optimization
+    void this._cachedClient;
+  }
+
+  /**
+   * Implementation of BaseProvider abstract method
+   * Determines if this provider supports OAuth authentication
+   */
+  protected supportsOAuth(): boolean {
+    // Only support Qwen OAuth for Qwen endpoints
+    // Use baseProviderConfig.baseURL if this.baseURL not set yet (during constructor)
+    const baseURL =
+      this.baseURL ||
+      this.baseProviderConfig.baseURL ||
+      'https://api.openai.com/v1';
+    return isQwenEndpoint(baseURL);
+  }
+
+  /**
+   * Helper method to determine if we're using Qwen (via OAuth or direct endpoint)
+   */
+  private isUsingQwen(): boolean {
+    // Check if we're using qwen format based on tool format detection
+    const toolFormat = this.detectToolFormat();
+    return toolFormat === 'qwen';
+  }
+
+  /**
+   * Update the OpenAI client with resolved authentication if needed
+   */
+  private async updateClientWithResolvedAuth(): Promise<void> {
+    const resolvedKey = await this.getAuthToken();
+    if (!resolvedKey) {
+      // Provide specific error message based on endpoint validation
+      const endpoint = this.baseURL || 'https://api.openai.com/v1';
+      if (this.isOAuthEnabled() && !this.supportsOAuth()) {
+        throw new Error(generateOAuthEndpointMismatchError(endpoint, 'qwen'));
+      }
+      throw new Error('No authentication available for OpenAI API calls');
+    }
+
+    // Check if we're using Qwen OAuth and need to update the baseURL
+    let effectiveBaseURL = this.baseURL;
+
+    this.logger.debug(
+      () =>
+        `updateClientWithResolvedAuth - OAuth enabled: ${this.isOAuthEnabled()}, OAuth provider: ${this.baseProviderConfig.oauthProvider}, baseURL: ${this.baseURL}, resolvedKey: ${resolvedKey?.substring(0, 10)}...`,
+    );
+
+    if (
+      this.isOAuthEnabled() &&
+      this.baseProviderConfig.oauthProvider === 'qwen'
+    ) {
+      // Get the OAuth token to check for resource_url
+      const oauthManager = this.baseProviderConfig.oauthManager;
+      if (oauthManager?.getOAuthToken) {
+        const oauthToken = await oauthManager.getOAuthToken('qwen');
+        this.logger.debug(
+          () =>
+            `OAuth token retrieved, resource_url: ${oauthToken?.resource_url}, access_token: ${oauthToken?.access_token?.substring(0, 10)}...`,
+        );
+        if (oauthToken?.resource_url) {
+          // Use the resource_url from the OAuth token
+          effectiveBaseURL = `https://${oauthToken.resource_url}/v1`;
+          this.logger.debug(
+            () => `Using Qwen OAuth endpoint: ${effectiveBaseURL}`,
+          );
+        }
+      }
+    }
+
+    // Only update client if the key or URL has changed
+    if (
+      this._cachedClientKey !== resolvedKey ||
+      this.baseURL !== effectiveBaseURL
+    ) {
+      const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
+        apiKey: resolvedKey,
+        // Allow browser environment if explicitly configured
+        dangerouslyAllowBrowser:
+          this.providerConfig?.allowBrowserEnvironment || false,
+      };
+      // Only include baseURL if it's defined
+      if (effectiveBaseURL) {
+        clientOptions.baseURL = effectiveBaseURL;
+      }
+
+      this.openai = new OpenAI(clientOptions);
+      this._cachedClientKey = resolvedKey;
+      // Update the baseURL to track changes
+      if (effectiveBaseURL !== this.baseURL) {
+        this.baseURL = effectiveBaseURL;
+      }
+    }
+  }
+
+  /**
+   * Transform a tool ID to OpenAI's expected format (call_ prefix)
+   */
+  private transformToolId(id: string): string {
+    if (!id) {
+      throw new Error('Tool ID is required and cannot be empty');
+    }
+
+    // If already has call_ prefix, return as-is
+    if (id.startsWith('call_')) {
+      return id;
+    }
+
+    // Replace any existing prefix with call_
+    const baseId = id.replace(/^(call_|toolu_)/, '');
+    return `call_${baseId}`;
+  }
+
+  private requiresTextToolCallParsing(): boolean {
+    if (this.providerConfig?.enableTextToolCallParsing === false) {
+      return false;
+    }
+
+    // Check if current tool format requires text-based parsing
+    const currentFormat = this.getToolFormat();
+    const textBasedFormats: ToolFormat[] = ['hermes', 'xml', 'llama'];
+    if (textBasedFormats.includes(currentFormat)) {
+      return true;
+    }
+
+    const configuredModels = this.providerConfig?.textToolCallModels || [];
+    return configuredModels.includes(this.currentModel);
+  }
+
+  override getToolFormat(): ToolFormat {
+    // Check manual override first
+    if (this.toolFormatOverride) {
+      return this.toolFormatOverride;
+    }
+
+    // Check for settings override
+    if (this.providerConfig?.providerToolFormatOverrides?.[this.name]) {
+      return this.providerConfig.providerToolFormatOverrides[
+        this.name
+      ] as ToolFormat;
+    }
+
+    // Auto-detect tool format based on model or base URL
+    if (
+      this.currentModel.includes('deepseek') ||
+      this.baseURL?.includes('deepseek')
+    ) {
+      return 'deepseek';
+    }
+
+    // Check for Qwen - including OAuth authenticated Qwen
+    if (this.isUsingQwen()) {
+      return 'qwen';
+    }
+
+    // Default to OpenAI format
+    return 'openai';
+  }
+
+  private shouldUseResponses(model: string): boolean {
+    // Check env flag override (highest priority)
+    if (process.env.OPENAI_RESPONSES_DISABLE === 'true') {
+      return false;
+    }
+
+    // Check settings override - if explicitly set to false, always respect that
+    if (this.providerConfig?.openaiResponsesEnabled === false) {
+      return false;
+    }
+
+    // Never use Responses API for non-OpenAI providers (those with custom base URLs)
+    const baseURL = this.baseURL || 'https://api.openai.com/v1';
+    if (baseURL !== 'https://api.openai.com/v1') {
+      return false;
+    }
+
+    // Default: Check if model starts with any of the responses API model prefixes
+    return RESPONSES_API_MODELS.some((responsesModel) =>
+      model.startsWith(responsesModel),
+    );
+  }
+
+  private async callResponsesEndpoint(
+    contents: Content[],
+    tools?: ITool[],
+    options?: {
+      stream?: boolean;
+      conversationId?: string;
+      parentId?: string;
+      tool_choice?: string | object;
+      store?: boolean;
+    },
+  ): Promise<AsyncIterableIterator<Content>> {
+    // MARKER: HS-041-OPENAI-CLEAN - Orphan detection removed from provider
+    // HistoryService now handles orphaned tool calls centrally
+
+    // Convert Content[] to OpenAI format for internal processing
+    // MARKER: HS-041-OPENAI-PARAMS - Accepts Content[] arrays as method parameters
+    const messages = this.converter.toProviderFormat(
+      contents,
+    ) as OpenAIMessage[];
+
+    // Check if API key is available (using resolved authentication)
+    const apiKey = await this.getAuthToken();
+    if (!apiKey) {
+      const endpoint = this.baseURL || 'https://api.openai.com/v1';
+      if (this.isOAuthEnabled() && !this.supportsOAuth()) {
+        throw new Error(generateOAuthEndpointMismatchError(endpoint, 'qwen'));
+      }
+      throw new Error('OpenAI API key is required to make API calls');
+    }
+
+    // Remove the stateful mode error to allow O3 to work with conversation IDs
+
+    // Check context usage and warn if getting close to limit
+    if (options?.conversationId && options?.parentId) {
+      const contextInfo = this.estimateContextUsage(
+        options.conversationId,
+        options.parentId,
+        messages,
+      );
+
+      // Warn if less than 4k tokens remaining
+      if (contextInfo.tokensRemaining < 4000) {
+        this.logger.debug(
+          () =>
+            `Warning: Only ${contextInfo.tokensRemaining} tokens remaining (${contextInfo.contextUsedPercent.toFixed(1)}% context used). Consider starting a new conversation.`,
+        );
+      }
+    }
+
+    // No cache - providers should be stateless
+    // The caller should manage conversation history
+
+    // Format tools for Responses API
+    const formattedTools = tools
+      ? this.toolFormatter.toResponsesTool(tools)
+      : undefined;
+
+    // MARKER: HS-041-OPENAI-CLEAN - Response handling completely removed
+    // Providers no longer generate special responses - handled centrally by HistoryService
+    const patchedMessages = messages;
+
+    // Build the request
+    const request = buildResponsesRequest({
+      model: this.currentModel,
+      messages: patchedMessages,
+      tools: formattedTools,
+      stream: options?.stream ?? true,
+      conversationId: options?.conversationId,
+      parentId: options?.parentId,
+      tool_choice: options?.tool_choice,
+      ...(this.modelParams || {}),
+    });
+
+    // Make the API call
+    const baseURL = this.baseURL || 'https://api.openai.com/v1';
+    const responsesURL = `${baseURL}/responses`;
+
+    // Ensure proper UTF-8 encoding for the request body
+    // This is crucial for handling multibyte characters (e.g., Japanese, Chinese)
+    const requestBody = JSON.stringify(request);
+
+    // Wrap the fetch call with retry logic for transient errors
+    const response = await retryWithBackoff(
+      async () => {
+        const res = await fetch(responsesURL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json; charset=utf-8',
+            // Add Accept header for SSE streaming
+            ...(options?.stream ? { Accept: 'text/event-stream' } : {}),
+          },
+          // Use plain string body for Node.js compatibility (Blob is not standard in Node)
+          body: requestBody,
+        });
+
+        // Check for retryable errors before returning
+        if (
+          !res.ok &&
+          (res.status === 429 || (res.status >= 500 && res.status < 600))
+        ) {
+          const errorBody = await res.text();
+          const error = new Error(
+            `HTTP ${res.status}: ${errorBody}`,
+          ) as Error & { status: number };
+          error.status = res.status;
+          throw error;
+        }
+
+        return res;
+      },
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1000,
+        maxDelayMs: 10000,
+        shouldRetry: (error: Error) => {
+          // Retry on 429 (rate limit) and 5xx errors
+          const status = (error as Error & { status?: number }).status;
+          return (
+            status === 429 ||
+            (status !== undefined && status >= 500 && status < 600)
+          );
+        },
+      },
+    );
+
+    // Handle errors
+    if (!response.ok) {
+      const errorBody = await response.text();
+
+      // Handle 422 context_length_exceeded error
+      if (
+        response.status === 422 &&
+        errorBody.includes('context_length_exceeded')
+      ) {
+        this.logger.debug(
+          () =>
+            'Context length exceeded, invalidating cache and retrying stateless...',
+        );
+
+        // No cache to invalidate - providers are stateless
+
+        // Retry without conversation context (pure stateless)
+        const retryRequest = buildResponsesRequest({
+          model: this.currentModel,
+          messages,
+          tools: formattedTools,
+          stream: options?.stream ?? true,
+          // Omit conversationId and parentId for stateless retry
+          tool_choice: options?.tool_choice,
+          ...(this.modelParams || {}),
+        });
+
+        // Ensure proper UTF-8 encoding for retry request as well
+        const retryRequestBody = JSON.stringify(retryRequest);
+
+        // Also wrap the retry request with retry logic
+        const retryResponse = await retryWithBackoff(
+          async () => {
+            const res = await fetch(responsesURL, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json; charset=utf-8',
+                // Add Accept header for SSE streaming
+                ...(options?.stream ? { Accept: 'text/event-stream' } : {}),
+              },
+              // Use plain string body for Node.js compatibility
+              body: retryRequestBody,
+            });
+
+            // Check for retryable errors before returning
+            if (
+              !res.ok &&
+              (res.status === 429 || (res.status >= 500 && res.status < 600))
+            ) {
+              const errorBody = await res.text();
+              const error = new Error(
+                `HTTP ${res.status}: ${errorBody}`,
+              ) as Error & { status: number };
+              error.status = res.status;
+              throw error;
+            }
+
+            return res;
+          },
+          {
+            maxAttempts: 3,
+            initialDelayMs: 1000,
+            maxDelayMs: 10000,
+            shouldRetry: (error: Error) => {
+              const status = (error as Error & { status?: number }).status;
+              return (
+                status === 429 ||
+                (status !== undefined && status >= 500 && status < 600)
+              );
+            },
+          },
+        );
+
+        if (!retryResponse.ok) {
+          const retryErrorBody = await retryResponse.text();
+          throw parseErrorResponse(
+            retryResponse.status,
+            retryErrorBody,
+            this.name,
+          );
+        }
+
+        // Use the retry response
+        return this.handleResponsesApiResponse(
+          retryResponse,
+          messages,
+          undefined, // No conversation context on retry
+          undefined,
+          options?.stream !== false,
+        );
+      }
+
+      throw parseErrorResponse(response.status, errorBody, this.name);
+    }
+
+    // Handle the response
+    return this.handleResponsesApiResponse(
+      response,
+      messages,
+      options?.conversationId,
+      options?.parentId,
+      options?.stream !== false,
+    );
+  }
+
+  private async handleResponsesApiResponse(
+    response: Response,
+    messages: OpenAIMessage[],
+    conversationId: string | undefined,
+    parentId: string | undefined,
+    isStreaming: boolean,
+  ): Promise<AsyncIterableIterator<Content>> {
+    // Handle streaming response
+    if (isStreaming && response.body) {
+      const collectedContents: Content[] = [];
+      // No cache - providers should be stateless
+
+      return (async function* (logger) {
+        for await (const content of parseResponsesStream(response.body!)) {
+          // Collect contents for caching
+          if (content.parts && content.parts.length > 0) {
+            collectedContents.push(content);
+          } else if (
+            (content as ContentWithUsage).usage &&
+            collectedContents.length === 0
+          ) {
+            // If we only got a usage message with no content, add a placeholder
+            collectedContents.push({
+              role: 'model',
+              parts: [{ text: '' }],
+            });
+          }
+
+          // Check if this is a metadata-only content with responseId
+          const contentWithMetadata = content as Content & {
+            metadata?: { responseId?: string };
+          };
+          if (contentWithMetadata.metadata?.responseId) {
+            // Store the responseId in the last collected content
+            const lastCollected =
+              collectedContents[collectedContents.length - 1];
+            if (lastCollected) {
+              const lastWithMeta = lastCollected as Content & {
+                metadata?: { responseId?: string };
+                id?: string;
+              };
+              lastWithMeta.metadata = {
+                responseId: contentWithMetadata.metadata.responseId,
+              };
+              lastWithMeta.id = contentWithMetadata.metadata.responseId;
+              logger.debug(
+                () =>
+                  `Stored Response ID ${contentWithMetadata.metadata!.responseId} in collected content`,
+              );
+            }
+          }
+
+          yield content;
+        }
+
+        // No caching - providers should be stateless
+        // Token tracking should be handled at a higher level if needed
+      })(this.logger);
+    }
+
+    // Handle non-streaming response
+    interface OpenAIResponse {
+      choices?: Array<{
+        message: {
+          role: string;
+          content?: string;
+          tool_calls?: Array<{
+            id: string;
+            type: 'function';
+            function: {
+              name: string;
+              arguments: string;
+            };
+          }>;
+        };
+      }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      };
+    }
+
+    const data = (await response.json()) as OpenAIResponse;
+    const resultContents: Content[] = [];
+
+    if (data.choices && data.choices.length > 0) {
+      const choice = data.choices[0];
+      const content: Content = {
+        role: 'model',
+        parts: [{ text: choice.message.content || '' }],
+      };
+
+      // Add function calls as parts if present
+      if (choice.message.tool_calls) {
+        for (const toolCall of choice.message.tool_calls) {
+          content.parts?.push({
+            functionCall: {
+              name: toolCall.function.name,
+              args: JSON.parse(toolCall.function.arguments),
+            },
+          });
+        }
+      }
+
+      // Add usage data as metadata if present
+      if (data.usage) {
+        (content as ContentWithUsage).usage = {
+          prompt_tokens: data.usage.prompt_tokens || 0,
+          completion_tokens: data.usage.completion_tokens || 0,
+          total_tokens: data.usage.total_tokens || 0,
+        };
+      }
+
+      resultContents.push(content);
+    }
+
+    // No caching - providers should be stateless
+    // Token tracking should be handled at a higher level if needed
+
+    return (async function* () {
+      for (const content of resultContents) {
+        yield content;
+      }
+    })();
+  }
+
+  override async getModels(): Promise<IModel[]> {
+    // Check if API key is available (using resolved authentication)
+    const apiKey = await this.getAuthToken();
+    if (!apiKey) {
+      const endpoint = this.baseURL || 'https://api.openai.com/v1';
+      if (this.isOAuthEnabled() && !this.supportsOAuth()) {
+        throw new Error(generateOAuthEndpointMismatchError(endpoint, 'qwen'));
+      }
+      throw new Error('OpenAI API key is required to fetch models');
+    }
+
+    try {
+      // Get resolved authentication and update client if needed
+      await this.updateClientWithResolvedAuth();
+
+      const response = await this.openai.models.list();
+      const models: IModel[] = [];
+
+      for await (const model of response) {
+        // Filter out non-chat models (embeddings, audio, image, moderation, DALL·E, etc.)
+        if (
+          !/embedding|whisper|audio|tts|image|vision|dall[- ]?e|moderation/i.test(
+            model.id,
+          )
+        ) {
+          models.push({
+            id: model.id,
+            name: model.id,
+            provider: 'openai',
+            supportedToolFormats: ['openai'],
+          });
+        }
+      }
+
+      return models;
+    } catch (error) {
+      this.logger.debug(() => `Error fetching models from OpenAI: ${error}`);
+      // Return a hardcoded list as fallback
+      // Check if this is a Qwen endpoint
+      if (isQwenEndpoint(this.baseURL || '')) {
+        return [
+          {
+            id: 'qwen3-coder-plus',
+            name: 'qwen3-coder-plus',
+            provider: 'openai',
+            supportedToolFormats: ['openai'],
+          },
+        ];
+      }
+
+      // Default OpenAI models
+      return [
+        {
+          id: 'gpt-4o',
+          name: 'gpt-4o',
+          provider: 'openai',
+          supportedToolFormats: ['openai'],
+        },
+        {
+          id: 'gpt-4o-mini',
+          name: 'gpt-4o-mini',
+          provider: 'openai',
+          supportedToolFormats: ['openai'],
+        },
+        {
+          id: 'gpt-4-turbo',
+          name: 'gpt-4-turbo',
+          provider: 'openai',
+          supportedToolFormats: ['openai'],
+        },
+        {
+          id: 'gpt-3.5-turbo',
+          name: 'gpt-3.5-turbo',
+          provider: 'openai',
+          supportedToolFormats: ['openai'],
+        },
+      ];
+    }
+  }
+
+  /**
+   * Helper method to convert OpenAI message format to Content and yield
+   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   */
+  private yieldAsContent(message: OpenAIMessage): Content {
+    return this.converter.fromProviderFormat(message);
+  }
+
+  /**
+   * Helper method to convert Message back to Content for legacy method
+   */
+  private messageToContent(message: Message): Content {
+    const content: Content = {
+      role: message.role as 'assistant' | 'user' | 'system',
+      parts: [{ text: message.content }],
+    };
+    
+    // Add tool calls if present
+    if (message.toolCalls && message.toolCalls.length > 0) {
+      (content as any).tool_calls = message.toolCalls.map(tc => ({
+        id: tc.id,
+        type: 'function',
+        function: {
+          name: tc.name,
+          arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments)
+        }
+      }));
+    }
+
+    // Add usage if present in metadata
+    if (message.metadata?.usage) {
+      (content as any).usage = message.metadata.usage;
+    }
+
+    return content;
+  }
+
+
+  /**
+   * @plan PLAN-20250826-RESPONSES.P17
+   * @requirement REQ-002.3
+   * @pseudocode lines 23-32
+   */
+  private findPreviousResponseId(contents: Content[]): string | null {
+    // Line 24: FOR i FROM contents.length - 1 TO 0 STEP -1
+    for (let i = contents.length - 1; i >= 0; i--) {
+      // Line 25: IF contents[i].role IN ['assistant', 'model'] THEN
+      if (contents[i].role === 'assistant' || contents[i].role === 'model') {
+        // Line 26-27: IF metadata.responseId EXISTS THEN RETURN it
+        const contentWithMetadata = contents[i] as Content & {
+          metadata?: { responseId?: string };
+        };
+        if (contentWithMetadata.metadata?.responseId) {
+          return contentWithMetadata.metadata.responseId;
+        }
+      }
+    }
+    // Line 31: RETURN null
+    return null;
+  }
+
+  async *generateChatCompletionEx(
+    messages: Message[],
+    tools?: ITool[],
+    _toolFormat?: string,
+    _sessionId?: string,
+  ): AsyncIterableIterator<Message> {
+    // Create adapter for format conversion
+    const adapter = new OpenAIHistoryAdapter();
+    
+    // Convert Message[] to OpenAI format
+    let openAIMessages = adapter.toOpenAIFormat(messages);
+    
+    // If we have a temporary system instruction, prepend it
+    if (this.temporarySystemInstruction) {
+      openAIMessages = [
+        {
+          role: 'system',
+          content: this.temporarySystemInstruction,
+        },
+        ...openAIMessages,
+      ];
+      // Clear the temporary instruction after use
+      this.temporarySystemInstruction = undefined;
+    }
+
+    // Check if API key is available (using resolved authentication)
+    const apiKey = await this.getAuthToken();
+    if (!apiKey) {
+      const endpoint = this.baseURL || 'https://api.openai.com/v1';
+      if (this.isOAuthEnabled() && !this.supportsOAuth()) {
+        throw new Error(generateOAuthEndpointMismatchError(endpoint, 'qwen'));
+      }
+      throw new Error('OpenAI API key is required to generate completions');
+    }
+
+    // TODO: Responses API support will be added later
+    /*
+    if (this.shouldUseResponses(this.currentModel)) {
+      // Responses API integration to be implemented
+      return;
+    }
+    */
+
+    const parser = this.requiresTextToolCallParsing()
+      ? new GemmaToolCallParser()
+      : null;
+
+    // Get current tool format (with override support)
+    const currentToolFormat = this.getToolFormat();
+
+    // Format tools using formatToolsForAPI method
+    const formattedTools = tools ? this.formatToolsForAPI(tools) : undefined;
+
+    // Get stream_options from ephemeral settings (not model params)
+    const streamOptions =
+      this.providerConfig?.getEphemeralSettings?.()?.['stream-options'];
+
+    // Default stream_options to { include_usage: true } unless explicitly set
+    const finalStreamOptions =
+      streamOptions !== undefined ? streamOptions : { include_usage: true };
+
+    // Get streaming setting from ephemeral settings (default: enabled)
+    const streamingSetting =
+      this.providerConfig?.getEphemeralSettings?.()?.['streaming'];
+    const streamingEnabled = streamingSetting !== 'disabled';
+
+    // Get resolved authentication and update client if needed
+    await this.updateClientWithResolvedAuth();
+
+    // Use messages as-is - no internal fields to strip
+    const cleanedMessages = openAIMessages;
+
+    this.logger.debug(
+      () =>
+        `About to make API call with model: ${this.currentModel}, baseURL: ${this.openai.baseURL}, apiKey: ${this.openai.apiKey?.substring(0, 10)}..., streaming: ${streamingEnabled}`,
+    );
+
+    // Debug: Log message roles being sent
+    this.logger.debug(
+      () =>
+        `Messages being sent to OpenAI (${cleanedMessages.length} total): ${cleanedMessages
+          .map(
+            (m) =>
+              `${m.role}${m.role === 'system' ? ` (length: ${m.content?.length})` : ''}`,
+          )
+          .join(', ')}`,
+    );
+
+    // Bridge logging: Basic request details
+    this.logger.debug(() => '=== HISTORY BRIDGE REQUEST ===');
+    this.logger.debug(() => `Model: ${this.currentModel}`);
+    this.logger.debug(() => `Message count: ${cleanedMessages.length}`);
+    this.logger.debug(() => `Tool count: ${formattedTools?.length || 0}`);
+    this.logger.debug(() => '=== END BRIDGE REQUEST ===');
+
+    let response;
+    try {
+      // Log the exact request being sent
+      this.logger.debug(() => '--- SENDING REQUEST TO OPENAI API ---');
+      const requestParams = {
+        model: this.currentModel,
+        messages:
+          cleanedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+        stream: streamingEnabled,
+        ...(streamingEnabled && finalStreamOptions
+          ? { stream_options: finalStreamOptions }
+          : {}),
+        tools: formattedTools as
+          | OpenAI.Chat.Completions.ChatCompletionTool[]
+          | undefined,
+        tool_choice: this.getToolChoiceForFormat(tools),
+        ...this.modelParams,
+      };
+
+      this.logger.debug(
+        () =>
+          `Request params: ${JSON.stringify({
+            model: requestParams.model,
+            messageCount: requestParams.messages.length,
+            stream: requestParams.stream,
+            toolCount: requestParams.tools?.length || 0,
+            tool_choice: requestParams.tool_choice,
+            modelParams: this.modelParams,
+          })}`,
+      );
+
+      // Build request params with exact order from original
+      response = await this.openai.chat.completions.create(requestParams);
+
+      this.logger.debug(
+        () =>
+          '--- RECEIVED RESPONSE FROM OPENAI API (streaming=' +
+          streamingEnabled +
+          ') ---',
+      );
+    } catch (error) {
+      // Debug the error
+      const errorStatus =
+        (error as { status?: number })?.status ||
+        (error as { response?: { status?: number } })?.response?.status;
+      const errorLabel =
+        errorStatus === 400 ? '[API Error 400]' : '[API Error]';
+
+      this.logger.error(
+        () => `${errorLabel} Error caught in API call: ${error}`,
+      );
+      this.logger.error(
+        () =>
+          `${errorLabel} Error type: ${(error as Error)?.constructor?.name}`,
+      );
+      this.logger.error(() => `${errorLabel} Error status: ${errorStatus}`);
+      this.logger.error(
+        () =>
+          `${errorLabel} Error response data: ${JSON.stringify((error as { response?: { data?: unknown } })?.response?.data, null, 2)}`,
+      );
+
+      // Log the last few messages to understand what's being sent
+      if (errorStatus === 400) {
+        // Dump full conversation history for debugging
+        this.logger.debug(
+          () => '=== OPENAI ERROR 400 - FULL CONVERSATION DUMP ===',
+        );
+        this.logger.debug(
+          () => `Total messages in conversation: ${cleanedMessages.length}`,
+        );
+
+        // Log the OpenAI format messages
+        this.logger.debug(() => '--- Converted OpenAI Format ---');
+        cleanedMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          this.logger.debug(
+            () =>
+              `Message[${idx}]: role=${msg.role}` +
+              (msgAny.tool_call_id ? ` tool_call_id=${msgAny.tool_call_id}` : '') +
+              (msgAny.tool_calls ? ` tool_calls=${msgAny.tool_calls.length}` : ''),
+          );
+
+          if (msg.content) {
+            const preview =
+              typeof msg.content === 'string' && msg.content.length > 100
+                ? msg.content.substring(0, 100) + '...'
+                : msg.content;
+            this.logger.debug(() => `  content: ${preview}`);
+          }
+
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any, tcIdx: number) => {
+              this.logger.debug(
+                () =>
+                  `  tool_call[${tcIdx}]: id=${tc.id}, name=${tc.function.name}`,
+              );
+            });
+          }
+        });
+
+        // Analysis of tool call/response pairing
+        this.logger.debug(() => '--- Tool Call/Response Analysis ---');
+        const toolCallMap = new Map<
+          string,
+          { callIdx: number; responseIdx: number | null }
+        >();
+
+        cleanedMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
+              toolCallMap.set(tc.id, { callIdx: idx, responseIdx: null });
+            });
+          }
+          if (msg.role === 'tool' && msgAny.tool_call_id) {
+            const entry = toolCallMap.get(msgAny.tool_call_id);
+            if (entry) {
+              entry.responseIdx = idx;
+            } else {
+              this.logger.debug(
+                () =>
+                  `  WARNING: Tool response ${msgAny.tool_call_id} has no corresponding call!`,
+              );
+            }
+          }
+        });
+
+        // Report unpaired tool calls
+        toolCallMap.forEach((entry, id) => {
+          if (entry.responseIdx === null) {
+            this.logger.debug(
+              () =>
+                `  ERROR: Tool call ${id} at index ${entry.callIdx} has no response!`,
+            );
+          } else {
+            this.logger.debug(
+              () =>
+                `  OK: Tool call ${id} at index ${entry.callIdx} has response at index ${entry.responseIdx}`,
+            );
+          }
+        });
+
+        // Log additional diagnostics for 400 errors
+        const hasPendingToolCalls = cleanedMessages.some((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
+            // Check if there's a matching tool response
+            const toolCallIds = msgAny.tool_calls.map((tc: any) => tc.id);
+            const hasResponses = toolCallIds.every((id: string) =>
+              cleanedMessages
+                .slice(idx + 1)
+                .some((m) => {
+                  const mAny = m as any;
+                  return m.role === 'tool' && mAny.tool_call_id === id;
+                }),
+            );
+            return !hasResponses;
+          }
+          return false;
+        });
+
+        this.logger.error(() => `${errorLabel} Last 5 messages being sent:`);
+        this.logger.error(
+          () =>
+            `${errorLabel} Has pending tool calls without responses: ${hasPendingToolCalls}`,
+        );
+        const lastMessages = cleanedMessages.slice(-5);
+        lastMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          this.logger.error(
+            () =>
+              `  [${cleanedMessages.length - 5 + idx}] ${msg.role}${msgAny.tool_call_id ? ` (tool response for ${msgAny.tool_call_id})` : ''}${msgAny.tool_calls ? ` (${msgAny.tool_calls.length} tool calls)` : ''}`,
+          );
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
+              this.logger.error(
+                () => `    - Tool call: ${tc.id} -> ${tc.function.name}`,
+              );
+            });
+          }
+        });
+
+        this.logger.debug(() => '=== END OPENAI ERROR 400 DUMP ===');
+      }
+
+      // Re-throw the error
+      throw error;
+    }
+
+    let fullContent = '';
+    const accumulatedToolCalls: Array<{
+      id: string;
+      type: 'function';
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }> = [];
+    let hasStreamedContent = false;
+    let usageData:
+      | {
+          prompt_tokens: number;
+          completion_tokens: number;
+          total_tokens: number;
+        }
+      | undefined;
+
+    // For Qwen streaming, buffer whitespace-only chunks to preserve spacing across chunk boundaries
+    let pendingWhitespace: string | null = null;
+
+    // Handle streaming vs non-streaming response
+    if (streamingEnabled) {
+      // Process streaming response directly
+      let chunkCount = 0;
+      for await (const chunk of response as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>) {
+        chunkCount++;
+        const delta = chunk.choices?.[0]?.delta;
+
+        // Log first few chunks and important chunks
+        if (chunkCount <= 5 || delta?.tool_calls) {
+          this.logger.debug(() => `--- STREAMING CHUNK ${chunkCount} ---`);
+          this.logger.debug(
+            () =>
+              `Delta: ${JSON.stringify({
+                role: delta?.role,
+                content: delta?.content?.substring(0, 100),
+                tool_calls: delta?.tool_calls?.map((tc) => ({
+                  index: tc.index,
+                  id: tc.id,
+                  function: tc.function
+                    ? {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments?.substring(0, 50),
+                      }
+                    : undefined,
+                })),
+              })}`,
+          );
+        }
+
+        if (delta?.content) {
+          // Enhanced debug logging to understand streaming behavior
+          if (this.isUsingQwen() && chunkCount <= 10) {
+            this.logger.debug(
+              () =>
+                `Qwen Chunk ${chunkCount}: ${JSON.stringify({
+                  content: delta.content,
+                  contentLength: delta.content?.length ?? 0,
+                  isWhitespaceOnly: delta.content?.trim() === '',
+                })}`,
+            );
+          }
+
+          // For text-based models, don't yield content chunks yet
+          if (!parser && delta.content) {
+            this.logger.debug(
+              () => `[Content Processing] Processing chunk with content`,
+              {
+                contentLength: delta.content.length,
+                contentPreview: delta.content.substring(0, 50),
+                isUsingQwen: this.isUsingQwen(),
+                willBuffer: this.isUsingQwen() && delta.content.trim() === '',
+              },
+            );
+
+            if (this.isUsingQwen()) {
+              const isWhitespaceOnly = delta.content.trim() === '';
+              if (isWhitespaceOnly) {
+                // Buffer whitespace-only chunk
+                pendingWhitespace = (pendingWhitespace || '') + delta.content;
+                this.logger.debug(
+                  () =>
+                    `[Whitespace Buffering] Buffered whitespace-only chunk (len=${delta.content?.length ?? 0}). pendingWhitespace now len=${pendingWhitespace?.length ?? 0}`,
+                  {
+                    contentHex: Buffer.from(delta.content).toString('hex'),
+                  },
+                );
+                continue;
+              } else if (pendingWhitespace) {
+                // Flush buffered whitespace before non-empty chunk to preserve spacing
+                this.logger.debug(
+                  () =>
+                    `Flushing pending whitespace (len=${pendingWhitespace?.length ?? 0}) before non-empty chunk`,
+                );
+                yield {
+                  id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                  role: 'assistant',
+                  content: pendingWhitespace,
+                  timestamp: Date.now(),
+                  conversationId: '',
+                  metadata: {},
+                } as Message;
+                hasStreamedContent = true;
+                fullContent += pendingWhitespace;
+                pendingWhitespace = null;
+              }
+            }
+
+            this.logger.debug(() => `[Yielding Content] Yielding chunk`, {
+              contentLength: delta.content.length,
+              hasStreamedContent,
+            });
+
+            yield {
+              id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              role: 'assistant',
+              content: delta.content,
+              timestamp: Date.now(),
+              conversationId: '',
+              metadata: {},
+            } as Message;
+            hasStreamedContent = true;
+          }
+
+          fullContent += delta.content;
+        }
+
+        if (delta?.tool_calls) {
+          for (const toolCall of delta.tool_calls) {
+            this.toolFormatter.accumulateStreamingToolCall(
+              toolCall,
+              accumulatedToolCalls,
+              currentToolFormat,
+            );
+          }
+        }
+
+        // Check for usage data in the chunk
+        if (chunk.usage) {
+          usageData = {
+            prompt_tokens: chunk.usage.prompt_tokens || 0,
+            completion_tokens: chunk.usage.completion_tokens || 0,
+            total_tokens: chunk.usage.total_tokens || 0,
+          };
+        }
+      }
+    } else {
+      // Non-streaming response - handle as a single completion
+      const completionResponse =
+        response as OpenAI.Chat.Completions.ChatCompletion;
+      const choice = completionResponse.choices[0];
+
+      if (choice?.message.content) {
+        fullContent = choice.message.content;
+      }
+
+      if (choice?.message.tool_calls) {
+        // Convert tool calls to the standard format
+        for (const toolCall of choice.message.tool_calls) {
+          if (toolCall.type === 'function' && toolCall.function) {
+            // Don't fix double stringification here - it's handled later in the final processing
+            accumulatedToolCalls.push({
+              id: toolCall.id,
+              type: 'function' as const,
+              function: toolCall.function,
+            });
+          }
+        }
+      }
+
+      if (completionResponse.usage) {
+        usageData = {
+          prompt_tokens: completionResponse.usage.prompt_tokens,
+          completion_tokens: completionResponse.usage.completion_tokens,
+          total_tokens: completionResponse.usage.total_tokens,
+        };
+      }
+
+      // For non-streaming, use adapter to create complete message
+      if (!parser && fullContent) {
+        const syntheticResponse = {
+          choices: [{
+            message: { content: fullContent, tool_calls: null },
+            finish_reason: 'stop'
+          }],
+          usage: usageData
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
+        hasStreamedContent = true;
+      }
+    }
+
+    // Flush any remaining pending whitespace for Qwen
+    if (pendingWhitespace && this.isUsingQwen() && !parser) {
+      this.logger.debug(
+        () =>
+          `Flushing trailing pending whitespace (len=${pendingWhitespace?.length ?? 0}) at stream end`,
+      );
+      yield {
+        id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        role: 'assistant',
+        content: pendingWhitespace,
+        timestamp: Date.now(),
+        conversationId: '',
+        metadata: {},
+      } as Message;
+      hasStreamedContent = true;
+      fullContent += pendingWhitespace;
+      pendingWhitespace = null;
+    }
+
+    // After stream ends, parse text-based tool calls if needed
+    if (parser && fullContent) {
+      const { cleanedContent, toolCalls } = parser.parse(fullContent);
+
+      if (toolCalls.length > 0) {
+        // Convert to standard format - use existing ID or generate for text-parsed tools
+        const standardToolCalls = toolCalls.map((tc, index) => ({
+          id: (tc as { id?: string }).id
+            ? this.transformToolId((tc as { id?: string }).id!)
+            : `call_${Date.now()}_${index}`,
+          type: 'function' as const,
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        }));
+
+        const syntheticResponse = {
+          choices: [{
+            message: { 
+              content: cleanedContent,
+              tool_calls: standardToolCalls 
+            },
+            finish_reason: 'tool_calls'
+          }],
+          usage: usageData
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
+      } else {
+        // No tool calls found, yield cleaned content
+        const syntheticResponse = {
+          choices: [{
+            message: { content: cleanedContent, tool_calls: null },
+            finish_reason: 'stop'
+          }],
+          usage: usageData
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
+      }
+    } else {
+      // Standard OpenAI tool call handling
+      if (accumulatedToolCalls.length > 0) {
+        // Fix double stringification for Qwen tool calls
+        // Qwen models pre-stringify arguments values, but later in the process
+        // they are being JSON.stringify'd again
+        let fixedToolCalls = accumulatedToolCalls;
+        if (this.isUsingQwen()) {
+          this.logger.debug(
+            () =>
+              `[Qwen Fix] Processing ${accumulatedToolCalls.length} tool calls for double-stringification fix`,
+          );
+          fixedToolCalls = accumulatedToolCalls.map((toolCall, index) => {
+            this.logger.debug(
+              () =>
+                `[Qwen Fix] Tool call ${index}: ${JSON.stringify({
+                  name: toolCall.function.name,
+                  argumentsType: typeof toolCall.function.arguments,
+                  argumentsLength: toolCall.function.arguments?.length,
+                  argumentsSample: toolCall.function.arguments?.substring(
+                    0,
+                    100,
+                  ),
+                })}`,
+            );
+            // For Qwen, check for nested double-stringification
+            // Qwen models stringify array/object values WITHIN the JSON arguments
+            if (
+              toolCall.function.arguments &&
+              typeof toolCall.function.arguments === 'string'
+            ) {
+              try {
+                // First, parse the arguments to get the JSON object
+                const parsedArgs = JSON.parse(toolCall.function.arguments);
+                let hasNestedStringification = false;
+
+                // Check each property to see if it's a stringified array/object/number
+                const fixedArgs: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(parsedArgs)) {
+                  if (typeof value === 'string') {
+                    const trimmed = value.trim();
+
+                    // Check if it's a stringified number (integer or float)
+                    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+                      const numValue = trimmed.includes('.')
+                        ? parseFloat(trimmed)
+                        : parseInt(trimmed, 10);
+                      fixedArgs[key] = numValue;
+                      hasNestedStringification = true;
+                      this.logger.debug(
+                        () =>
+                          `[Qwen Fix] Fixed stringified number in property '${key}' for ${toolCall.function.name}: "${value}" -> ${numValue}`,
+                      );
+                    }
+                    // Check if it looks like a stringified array or object
+                    // Also check for Python-style dictionaries with single quotes
+                    else if (
+                      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+                      (trimmed.startsWith('{') && trimmed.endsWith('}'))
+                    ) {
+                      try {
+                        // Try to parse it as JSON
+                        const nestedParsed = JSON.parse(value);
+                        fixedArgs[key] = nestedParsed;
+                        hasNestedStringification = true;
+                        this.logger.debug(
+                          () =>
+                            `[Qwen Fix] Fixed nested stringification in property '${key}' for ${toolCall.function.name}`,
+                        );
+                      } catch {
+                        // Try to convert Python-style to JSON (single quotes to double quotes)
+                        try {
+                          const jsonified = value
+                            .replace(/'/g, '"')
+                            .replace(/: True/g, ': true')
+                            .replace(/: False/g, ': false')
+                            .replace(/: None/g, ': null');
+                          const nestedParsed = JSON.parse(jsonified);
+                          fixedArgs[key] = nestedParsed;
+                          hasNestedStringification = true;
+                          this.logger.debug(
+                            () =>
+                              `[Qwen Fix] Fixed Python-style nested stringification in property '${key}' for ${toolCall.function.name}`,
+                          );
+                        } catch {
+                          // Not valid JSON even after conversion, keep as string
+                          fixedArgs[key] = value;
+                        }
+                      }
+                    } else {
+                      fixedArgs[key] = value;
+                    }
+                  } else {
+                    fixedArgs[key] = value;
+                  }
+                }
+
+                if (hasNestedStringification) {
+                  this.logger.debug(
+                    () =>
+                      `[Qwen Fix] Fixed nested double-stringification for ${toolCall.function.name}`,
+                  );
+                  return {
+                    ...toolCall,
+                    function: {
+                      ...toolCall.function,
+                      arguments: JSON.stringify(fixedArgs),
+                    },
+                  };
+                }
+              } catch (_e) {
+                // If parsing fails, check for old-style double-stringification
+                if (
+                  toolCall.function.arguments.startsWith('"') &&
+                  toolCall.function.arguments.endsWith('"')
+                ) {
+                  try {
+                    // Old fix: entire arguments were double-stringified
+                    const parsedArgs = JSON.parse(toolCall.function.arguments);
+                    this.logger.debug(
+                      () =>
+                        `[Qwen Fix] Fixed whole-argument double-stringification for ${toolCall.function.name}`,
+                    );
+                    return {
+                      ...toolCall,
+                      function: {
+                        ...toolCall.function,
+                        arguments: JSON.stringify(parsedArgs),
+                      },
+                    };
+                  } catch {
+                    // Leave as-is if we can't parse
+                  }
+                }
+              }
+            }
+            // No fix needed
+            this.logger.debug(
+              () =>
+                `[Qwen Fix] No double-stringification detected for ${toolCall.function.name}, keeping original`,
+            );
+            return toolCall;
+          });
+        }
+
+        if (this.isUsingQwen()) {
+          this.logger.debug(
+            () =>
+              `Final message with tool calls: ${JSON.stringify({
+                contentLength: fullContent.length,
+                content:
+                  fullContent.substring(0, 200) +
+                  (fullContent.length > 200 ? '...' : ''),
+                toolCallCount: accumulatedToolCalls.length,
+                hasStreamedContent,
+              })}`,
+          );
+        }
+
+        // For Qwen models, don't duplicate content if we've already streamed it
+        const shouldOmitContent = hasStreamedContent && this.isUsingQwen();
+
+        this.logger.debug(
+          () => '[Tool Call Handling] Deciding how to yield tool calls',
+          {
+            hasStreamedContent,
+            isUsingQwen: this.isUsingQwen(),
+            shouldOmitContent,
+            fullContentLength: fullContent.length,
+            toolCallCount: fixedToolCalls?.length || 0,
+          },
+        );
+
+        if (shouldOmitContent) {
+          // Qwen: Send just a space to prevent stream stopping
+          const syntheticResponse = {
+            choices: [{
+              message: {
+                content: ' ', // Single space instead of empty to keep stream alive
+                tool_calls: fixedToolCalls
+              },
+              finish_reason: 'tool_calls'
+            }],
+            usage: usageData
+          };
+          yield adapter.fromOpenAIComplete(syntheticResponse);
+        } else {
+          // Include full content with tool calls
+          const syntheticResponse = {
+            choices: [{
+              message: {
+                content: fullContent || '',
+                tool_calls: fixedToolCalls
+              },
+              finish_reason: 'tool_calls'
+            }],
+            usage: usageData
+          };
+          yield adapter.fromOpenAIComplete(syntheticResponse);
+        }
+      } else if (usageData) {
+        // Always emit usage data so downstream consumers can update stats
+        const syntheticResponse = {
+          choices: [{
+            message: { content: '', tool_calls: null },
+            finish_reason: 'stop'
+          }],
+          usage: usageData
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
+      }
+    }
+  }
+
+  /**
+   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   * @requirement REQ-003.1
+   * @pseudocode lines 140-163
+   */
+  /**
+   * @plan PLAN-20250826-RESPONSES.P05
+   * @requirement REQ-001
+   */
+  // @plan PLAN-20250128-HISTORYSERVICE.P29
+  // @requirement HS-041
+  // @phase provider-updates-impl
+  // @cleanup Remove tool response generation
+  async *generateChatCompletion(
+    contents: Content[],
+    tools?: ITool[],
+    _toolFormat?: string,
+    _sessionId?: string,
+  ): AsyncIterableIterator<Content> {
+    // Create adapter for format conversion (results will be converted back to Content)
+    const adapter = new OpenAIHistoryAdapter();
+    
+    // If we have a temporary system instruction, prepend it as a system Content
+    let contentsToProcess = contents;
+    if (this.temporarySystemInstruction) {
+      const systemContent: Content = {
+        role: 'system',
+        parts: [{ text: this.temporarySystemInstruction }],
+      };
+      contentsToProcess = [systemContent, ...contents];
+      // Clear the temporary instruction after use
+      this.temporarySystemInstruction = undefined;
+    }
+
+    // For non-responses API path, convert Content[] to OpenAI format
+    const messages = this.converter.toProviderFormat(
+      contentsToProcess,
+    ) as OpenAIMessage[];
+
+    // Check if API key is available (using resolved authentication)
+    const apiKey = await this.getAuthToken();
+    if (!apiKey) {
+      const endpoint = this.baseURL || 'https://api.openai.com/v1';
+      if (this.isOAuthEnabled() && !this.supportsOAuth()) {
+        throw new Error(generateOAuthEndpointMismatchError(endpoint, 'qwen'));
+      }
+      throw new Error('OpenAI API key is required to generate completions');
+    }
+
+    // Line 12: IF this.shouldUseResponses(model) THEN
+    if (this.shouldUseResponses(this.currentModel)) {
+      // Line 13: previousResponseId = CALL findPreviousResponseId(contents)
+      const previousResponseId = this.findPreviousResponseId(contentsToProcess);
+
+      // Line 14: conversationId = sessionId OR generateTempId()
+      const conversationId =
+        _sessionId ||
+        `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Line 15-17: Build and call responses endpoint
+      // Stream responses directly as Content (no conversion needed)
+      for await (const content of await this.callResponsesEndpoint(
+        contentsToProcess,
+        tools,
+        {
+          stream: true,
+          tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
+          store: true, // Default to storing conversation state - that's the point of Responses API
+          conversationId,
+          parentId: previousResponseId || undefined,
+        },
+      )) {
+        // Content is already in the correct format from parseResponsesStream
+        yield content;
+      }
+      return;
+    }
+
+    // Use messages as-is - no special response handling
+    const patchedMessages = messages;
+
+    // Validate tool messages have required tool_call_id
+    const toolMessages = patchedMessages.filter((msg) => msg.role === 'tool');
+    const missingIds = toolMessages.filter((msg) => !msg.tool_call_id);
+
+    if (missingIds.length > 0) {
+      this.logger.error(
+        () =>
+          `FATAL: Tool messages missing tool_call_id: ${JSON.stringify(missingIds)}`,
+      );
+      throw new Error(
+        `OpenAI API requires tool_call_id for all tool messages. Found ${missingIds.length} tool message(s) without IDs.`,
+      );
+    }
+
+    const parser = this.requiresTextToolCallParsing()
+      ? new GemmaToolCallParser()
+      : null;
+
+    // Get current tool format (with override support)
+    const currentToolFormat = this.getToolFormat();
+
+    // Format tools using formatToolsForAPI method
+    const formattedTools = tools ? this.formatToolsForAPI(tools) : undefined;
+
+    // Get stream_options from ephemeral settings (not model params)
+    const streamOptions =
+      this.providerConfig?.getEphemeralSettings?.()?.['stream-options'];
+
+    // Default stream_options to { include_usage: true } unless explicitly set
+    const finalStreamOptions =
+      streamOptions !== undefined ? streamOptions : { include_usage: true };
+
+    // Get streaming setting from ephemeral settings (default: enabled)
+    const streamingSetting =
+      this.providerConfig?.getEphemeralSettings?.()?.['streaming'];
+    const streamingEnabled = streamingSetting !== 'disabled';
+
+    // Get resolved authentication and update client if needed
+    await this.updateClientWithResolvedAuth();
+
+    // Use messages as-is - no internal fields to strip
+    const cleanedMessages = patchedMessages;
+
+    this.logger.debug(
+      () =>
+        `About to make API call with model: ${this.currentModel}, baseURL: ${this.openai.baseURL}, apiKey: ${this.openai.apiKey?.substring(0, 10)}..., streaming: ${streamingEnabled}`,
+    );
+
+    // Debug: Log message roles being sent
+    this.logger.debug(
+      () =>
+        `Messages being sent to OpenAI (${cleanedMessages.length} total): ${cleanedMessages
+          .map(
+            (m) =>
+              `${m.role}${m.role === 'system' ? ` (length: ${m.content?.length})` : ''}`,
+          )
+          .join(', ')}`,
+    );
+
+    // DETAILED DEBUG: Log full messages for debugging 400 errors
+    this.logger.debug(() => '=== OPENAI API REQUEST DETAILS ===');
+    this.logger.debug(() => `Model: ${this.currentModel}`);
+    this.logger.debug(() => `Provider: ${this.baseURL || 'OpenAI'}`);
+    this.logger.debug(() => `Turn number: ${contents.length}`);
+
+    // Log the raw Content[] format before conversion
+    this.logger.debug(() => '--- RAW Content[] FORMAT (before conversion) ---');
+    contents.forEach((content, idx) => {
+      this.logger.debug(() => `Content[${idx}] role=${content.role}`);
+      if (content.parts) {
+        content.parts.forEach((part, partIdx) => {
+          if ('text' in part && part.text) {
+            this.logger.debug(
+              () =>
+                `  Part[${partIdx}]: text="${part.text?.substring(0, 100) || ''}..."`,
+            );
+          }
+          if ('functionCall' in part && part.functionCall) {
+            const fc = part.functionCall as any;
+            this.logger.debug(
+              () =>
+                `  Part[${partIdx}]: functionCall id=${fc.id}, name=${fc.name}`,
+            );
+          }
+          if ('functionResponse' in part && part.functionResponse) {
+            const fr = part.functionResponse as any;
+            this.logger.debug(
+              () =>
+                `  Part[${partIdx}]: functionResponse id=${fr.id}, name=${fr.name}`,
+            );
+          }
+        });
+      }
+    });
+
+    // Log each converted message in detail
+    this.logger.debug(
+      () => '--- CONVERTED OpenAI FORMAT (after conversion) ---',
+    );
+    cleanedMessages.forEach((msg, idx) => {
+      this.logger.debug(
+        () => `--- Message ${idx + 1} of ${cleanedMessages.length} ---`,
+      );
+      this.logger.debug(() => `Role: ${msg.role}`);
+
+      if (msg.content) {
+        this.logger.debug(
+          () => `Content: ${JSON.stringify(msg.content).substring(0, 500)}`,
+        );
+      }
+
+      if (msg.tool_calls) {
+        this.logger.debug(() => `Tool Calls: ${msg.tool_calls?.length || 0}`);
+        msg.tool_calls?.forEach((tc, tcIdx) => {
+          this.logger.debug(
+            () =>
+              `  Tool Call ${tcIdx + 1}: id=${tc.id}, name=${tc.function.name}`,
+          );
+          this.logger.debug(
+            () => `    Args: ${tc.function.arguments.substring(0, 200)}`,
+          );
+        });
+      }
+
+      if (msg.tool_call_id) {
+        this.logger.debug(() => `Tool Response ID: ${msg.tool_call_id}`);
+        this.logger.debug(
+          () =>
+            `Tool Response Content: ${JSON.stringify(msg.content).substring(0, 500)}`,
+        );
+      }
+    });
+
+    // Log if there are any duplicate tool call IDs
+    const toolCallIds = new Set<string>();
+    const duplicateIds = new Set<string>();
+
+    cleanedMessages.forEach((msg) => {
+      if (msg.tool_calls) {
+        msg.tool_calls.forEach((tc) => {
+          if (toolCallIds.has(tc.id)) {
+            duplicateIds.add(tc.id);
+          }
+          toolCallIds.add(tc.id);
+        });
+      }
+    });
+
+    if (duplicateIds.size > 0) {
+      this.logger.error(
+        () =>
+          `!!! DUPLICATE TOOL CALL IDS DETECTED: ${Array.from(duplicateIds).join(', ')}`,
+      );
+    }
+
+    // Check for orphaned tool responses
+    const toolResponseIds = new Set<string>();
+    cleanedMessages.forEach((msg) => {
+      if (msg.tool_call_id) {
+        toolResponseIds.add(msg.tool_call_id);
+      }
+    });
+
+    const orphanedResponses = Array.from(toolResponseIds).filter(
+      (id) => !toolCallIds.has(id),
+    );
+    if (orphanedResponses.length > 0) {
+      this.logger.error(
+        () =>
+          `!!! ORPHANED TOOL RESPONSES DETECTED (no matching call): ${orphanedResponses.join(', ')}`,
+      );
+    }
+
+    this.logger.debug(() => '=== END REQUEST DETAILS ===');
+
+    let response;
+    try {
+      // Log the exact request being sent
+      this.logger.debug(() => '--- SENDING REQUEST TO OPENAI API ---');
+      const requestParams = {
+        model: this.currentModel,
+        messages:
+          cleanedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+        stream: streamingEnabled,
+        ...(streamingEnabled && finalStreamOptions
+          ? { stream_options: finalStreamOptions }
+          : {}),
+        tools: formattedTools as
+          | OpenAI.Chat.Completions.ChatCompletionTool[]
+          | undefined,
+        tool_choice: this.getToolChoiceForFormat(tools),
+        ...this.modelParams,
+      };
+
+      this.logger.debug(
+        () =>
+          `Request params: ${JSON.stringify({
+            model: requestParams.model,
+            messageCount: requestParams.messages.length,
+            stream: requestParams.stream,
+            toolCount: requestParams.tools?.length || 0,
+            tool_choice: requestParams.tool_choice,
+            modelParams: this.modelParams,
+          })}`,
+      );
+
+      // Build request params with exact order from original
+      response = await this.openai.chat.completions.create(requestParams);
+
+      this.logger.debug(
+        () =>
+          '--- RECEIVED RESPONSE FROM OPENAI API (streaming=' +
+          streamingEnabled +
+          ') ---',
+      );
+    } catch (error) {
+      // Debug the error
+      const errorStatus =
+        (error as { status?: number })?.status ||
+        (error as { response?: { status?: number } })?.response?.status;
+      const errorLabel =
+        errorStatus === 400 ? '[API Error 400]' : '[API Error]';
+
+      this.logger.error(
+        () => `${errorLabel} Error caught in API call: ${error}`,
+      );
+      this.logger.error(
+        () =>
+          `${errorLabel} Error type: ${(error as Error)?.constructor?.name}`,
+      );
+      this.logger.error(() => `${errorLabel} Error status: ${errorStatus}`);
+      this.logger.error(
+        () =>
+          `${errorLabel} Error response data: ${JSON.stringify((error as { response?: { data?: unknown } })?.response?.data, null, 2)}`,
+      );
+
+      // Log the last few messages to understand what's being sent
+      if (errorStatus === 400) {
+        // Dump full conversation history for debugging
+        this.logger.debug(
+          () => '=== OPENAI ERROR 400 - FULL CONVERSATION DUMP ===',
+        );
+        this.logger.debug(
+          () => `Total messages in conversation: ${cleanedMessages.length}`,
+        );
+
+        // Log the OpenAI format messages
+        this.logger.debug(() => '--- Converted OpenAI Format ---');
+        cleanedMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          this.logger.debug(
+            () =>
+              `Message[${idx}]: role=${msg.role}` +
+              (msgAny.tool_call_id ? ` tool_call_id=${msgAny.tool_call_id}` : '') +
+              (msgAny.tool_calls ? ` tool_calls=${msgAny.tool_calls.length}` : ''),
+          );
+
+          if (msg.content) {
+            const preview =
+              typeof msg.content === 'string' && msg.content.length > 100
+                ? msg.content.substring(0, 100) + '...'
+                : msg.content;
+            this.logger.debug(() => `  content: ${preview}`);
+          }
+
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any, tcIdx: number) => {
+              this.logger.debug(
+                () =>
+                  `  tool_call[${tcIdx}]: id=${tc.id}, name=${tc.function.name}`,
+              );
+            });
+          }
+        });
+
+        // Analysis of tool call/response pairing
+        this.logger.debug(() => '--- Tool Call/Response Analysis ---');
+        const toolCallMap = new Map<
+          string,
+          { callIdx: number; responseIdx: number | null }
+        >();
+
+        cleanedMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
+              toolCallMap.set(tc.id, { callIdx: idx, responseIdx: null });
+            });
+          }
+          if (msg.role === 'tool' && msgAny.tool_call_id) {
+            const entry = toolCallMap.get(msgAny.tool_call_id);
+            if (entry) {
+              entry.responseIdx = idx;
+            } else {
+              this.logger.debug(
+                () =>
+                  `  WARNING: Tool response ${msgAny.tool_call_id} has no corresponding call!`,
+              );
+            }
+          }
+        });
+
+        // Report unpaired tool calls
+        toolCallMap.forEach((entry, id) => {
+          if (entry.responseIdx === null) {
+            this.logger.debug(
+              () =>
+                `  ERROR: Tool call ${id} at index ${entry.callIdx} has no response!`,
+            );
+          } else {
+            this.logger.debug(
+              () =>
+                `  OK: Tool call ${id} at index ${entry.callIdx} has response at index ${entry.responseIdx}`,
+            );
+          }
+        });
+
+        // Log additional diagnostics for 400 errors
+        const hasPendingToolCalls = cleanedMessages.some((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
+            // Check if there's a matching tool response
+            const toolCallIds = msgAny.tool_calls.map((tc: any) => tc.id);
+            const hasResponses = toolCallIds.every((id: string) =>
+              cleanedMessages
+                .slice(idx + 1)
+                .some((m) => {
+                  const mAny = m as any;
+                  return m.role === 'tool' && mAny.tool_call_id === id;
+                }),
+            );
+            return !hasResponses;
+          }
+          return false;
+        });
+
+        this.logger.error(() => `${errorLabel} Last 5 messages being sent:`);
+        this.logger.error(
+          () =>
+            `${errorLabel} Has pending tool calls without responses: ${hasPendingToolCalls}`,
+        );
+        const lastMessages = cleanedMessages.slice(-5);
+        lastMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          this.logger.error(
+            () =>
+              `  [${cleanedMessages.length - 5 + idx}] ${msg.role}${msgAny.tool_call_id ? ` (tool response for ${msgAny.tool_call_id})` : ''}${msgAny.tool_calls ? ` (${msgAny.tool_calls.length} tool calls)` : ''}`,
+          );
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
+              this.logger.error(
+                () => `    - Tool call: ${tc.id} -> ${tc.function.name}`,
+              );
+            });
+          }
+        });
+
+        this.logger.debug(() => '=== END OPENAI ERROR 400 DUMP ===');
+      }
+
+      // Re-throw the error
+      throw error;
+    }
+
+    let fullContent = '';
+    const accumulatedToolCalls: Array<{
+      id: string;
+      type: 'function';
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }> = [];
+    let hasStreamedContent = false;
+    let usageData:
+      | {
+          prompt_tokens: number;
+          completion_tokens: number;
+          total_tokens: number;
+        }
+      | undefined;
+
+    // For Qwen streaming, buffer whitespace-only chunks to preserve spacing across chunk boundaries
+    let pendingWhitespace: string | null = null;
+
+    // Handle streaming vs non-streaming response
+    if (streamingEnabled) {
+      // Process streaming response directly
+      let chunkCount = 0;
+      for await (const chunk of response as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>) {
+        chunkCount++;
+        const delta = chunk.choices?.[0]?.delta;
+
+        // Log first few chunks and important chunks
+        if (chunkCount <= 5 || delta?.tool_calls) {
+          this.logger.debug(() => `--- STREAMING CHUNK ${chunkCount} ---`);
+          this.logger.debug(
+            () =>
+              `Delta: ${JSON.stringify({
+                role: delta?.role,
+                content: delta?.content?.substring(0, 100),
+                tool_calls: delta?.tool_calls?.map((tc) => ({
+                  index: tc.index,
+                  id: tc.id,
+                  function: tc.function
+                    ? {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments?.substring(0, 50),
+                      }
+                    : undefined,
+                })),
+              })}`,
+          );
+        }
+
+        if (delta?.content) {
+          // Enhanced debug logging to understand streaming behavior
+          if (this.isUsingQwen() && chunkCount <= 10) {
+            this.logger.debug(
+              () =>
+                `Qwen Chunk ${chunkCount}: ${JSON.stringify({
+                  content: delta.content,
+                  contentLength: delta.content?.length ?? 0,
+                  isWhitespaceOnly: delta.content?.trim() === '',
+                })}`,
+            );
+          }
+
+          // For text-based models, don't yield content chunks yet
+          if (!parser && delta.content) {
+            this.logger.debug(
+              () => `[Content Processing] Processing chunk with content`,
+              {
+                contentLength: delta.content.length,
+                contentPreview: delta.content.substring(0, 50),
+                isUsingQwen: this.isUsingQwen(),
+                willBuffer: this.isUsingQwen() && delta.content.trim() === '',
+              },
+            );
+
+            if (this.isUsingQwen()) {
+              const isWhitespaceOnly = delta.content.trim() === '';
+              if (isWhitespaceOnly) {
+                // Buffer whitespace-only chunk
+                pendingWhitespace = (pendingWhitespace || '') + delta.content;
+                this.logger.debug(
+                  () =>
+                    `[Whitespace Buffering] Buffered whitespace-only chunk (len=${delta.content?.length ?? 0}). pendingWhitespace now len=${pendingWhitespace?.length ?? 0}`,
+                  {
+                    contentHex: Buffer.from(delta.content).toString('hex'),
+                  },
+                );
+                continue;
+              } else if (pendingWhitespace) {
+                // Flush buffered whitespace before non-empty chunk to preserve spacing
+                this.logger.debug(
+                  () =>
+                    `Flushing pending whitespace (len=${pendingWhitespace?.length ?? 0}) before non-empty chunk`,
+                );
+                yield {
+                  id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                  role: 'assistant',
+                  content: pendingWhitespace,
+                  timestamp: Date.now(),
+                  conversationId: '',
+                  metadata: {},
+                } as Message;
+                hasStreamedContent = true;
+                fullContent += pendingWhitespace;
+                pendingWhitespace = null;
+              }
+            }
+
+            this.logger.debug(() => `[Yielding Content] Yielding chunk`, {
+              contentLength: delta.content.length,
+              hasStreamedContent,
+            });
+
+            yield {
+              id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              role: 'assistant',
+              content: delta.content,
+              timestamp: Date.now(),
+              conversationId: '',
+              metadata: {},
+            } as Message;
+            hasStreamedContent = true;
+          }
+
+          fullContent += delta.content;
+        }
+
+        if (delta?.tool_calls) {
+          for (const toolCall of delta.tool_calls) {
+            this.toolFormatter.accumulateStreamingToolCall(
+              toolCall,
+              accumulatedToolCalls,
+              currentToolFormat,
+            );
+          }
+        }
+
+        // Check for usage data in the chunk
+        if (chunk.usage) {
+          usageData = {
+            prompt_tokens: chunk.usage.prompt_tokens || 0,
+            completion_tokens: chunk.usage.completion_tokens || 0,
+            total_tokens: chunk.usage.total_tokens || 0,
+          };
+        }
+      }
+    } else {
+      // Non-streaming response - handle as a single completion
+      const completionResponse =
+        response as OpenAI.Chat.Completions.ChatCompletion;
+      const choice = completionResponse.choices[0];
+
+      if (choice?.message.content) {
+        fullContent = choice.message.content;
+      }
+
+      if (choice?.message.tool_calls) {
+        // Convert tool calls to the standard format
+        for (const toolCall of choice.message.tool_calls) {
+          if (toolCall.type === 'function' && toolCall.function) {
+            // Don't fix double stringification here - it's handled later in the final processing
+            accumulatedToolCalls.push({
+              id: toolCall.id,
+              type: 'function' as const,
+              function: toolCall.function,
+            });
+          }
+        }
+      }
+
+      if (completionResponse.usage) {
+        usageData = {
+          prompt_tokens: completionResponse.usage.prompt_tokens,
+          completion_tokens: completionResponse.usage.completion_tokens,
+          total_tokens: completionResponse.usage.total_tokens,
+        };
+      }
+
+      // For non-streaming, use adapter to create complete message
+      if (!parser && fullContent) {
+        const syntheticResponse = {
+          choices: [{
+            message: { content: fullContent, tool_calls: null },
+            finish_reason: 'stop'
+          }],
+          usage: usageData
+        };
+        yield this.messageToContent(adapter.fromOpenAIComplete(syntheticResponse));
+        hasStreamedContent = true;
+      }
+    }
+
+    // Flush any remaining pending whitespace for Qwen
+    if (pendingWhitespace && this.isUsingQwen() && !parser) {
+      this.logger.debug(
+        () =>
+          `Flushing trailing pending whitespace (len=${pendingWhitespace?.length ?? 0}) at stream end`,
+      );
+      yield {
+        id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        role: 'assistant',
+        content: pendingWhitespace,
+        timestamp: Date.now(),
+        conversationId: '',
+        metadata: {},
+      } as Message;
+      hasStreamedContent = true;
+      fullContent += pendingWhitespace;
+      pendingWhitespace = null;
+    }
+
+    // After stream ends, parse text-based tool calls if needed
+    if (parser && fullContent) {
+      const { cleanedContent, toolCalls } = parser.parse(fullContent);
+
+      if (toolCalls.length > 0) {
+        // Convert to standard format - use existing ID or generate for text-parsed tools
+        const standardToolCalls = toolCalls.map((tc, index) => ({
+          id: (tc as { id?: string }).id
+            ? this.transformToolId((tc as { id?: string }).id!)
+            : `call_${Date.now()}_${index}`,
+          type: 'function' as const,
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        }));
+
+        const syntheticResponse = {
+          choices: [{
+            message: { 
+              content: cleanedContent,
+              tool_calls: standardToolCalls 
+            },
+            finish_reason: 'tool_calls'
+          }],
+          usage: usageData
+        };
+        yield this.messageToContent(adapter.fromOpenAIComplete(syntheticResponse));
+      } else {
+        // No tool calls found, yield cleaned content
+        const syntheticResponse = {
+          choices: [{
+            message: { content: cleanedContent, tool_calls: null },
+            finish_reason: 'stop'
+          }],
+          usage: usageData
+        };
+        yield this.messageToContent(adapter.fromOpenAIComplete(syntheticResponse));
+      }
+    } else {
+      // Standard OpenAI tool call handling
+      if (accumulatedToolCalls.length > 0) {
+        // Fix double stringification for Qwen tool calls
+        // Qwen models pre-stringify arguments values, but later in the process
+        // they are being JSON.stringify'd again
+        let fixedToolCalls = accumulatedToolCalls;
+        if (this.isUsingQwen()) {
+          this.logger.debug(
+            () =>
+              `[Qwen Fix] Processing ${accumulatedToolCalls.length} tool calls for double-stringification fix`,
+          );
+          fixedToolCalls = accumulatedToolCalls.map((toolCall, index) => {
+            this.logger.debug(
+              () =>
+                `[Qwen Fix] Tool call ${index}: ${JSON.stringify({
+                  name: toolCall.function.name,
+                  argumentsType: typeof toolCall.function.arguments,
+                  argumentsLength: toolCall.function.arguments?.length,
+                  argumentsSample: toolCall.function.arguments?.substring(
+                    0,
+                    100,
+                  ),
+                })}`,
+            );
+            // For Qwen, check for nested double-stringification
+            // Qwen models stringify array/object values WITHIN the JSON arguments
+            if (
+              toolCall.function.arguments &&
+              typeof toolCall.function.arguments === 'string'
+            ) {
+              try {
+                // First, parse the arguments to get the JSON object
+                const parsedArgs = JSON.parse(toolCall.function.arguments);
+                let hasNestedStringification = false;
+
+                // Check each property to see if it's a stringified array/object/number
+                const fixedArgs: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(parsedArgs)) {
+                  if (typeof value === 'string') {
+                    const trimmed = value.trim();
+
+                    // Check if it's a stringified number (integer or float)
+                    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+                      const numValue = trimmed.includes('.')
+                        ? parseFloat(trimmed)
+                        : parseInt(trimmed, 10);
+                      fixedArgs[key] = numValue;
+                      hasNestedStringification = true;
+                      this.logger.debug(
+                        () =>
+                          `[Qwen Fix] Fixed stringified number in property '${key}' for ${toolCall.function.name}: "${value}" -> ${numValue}`,
+                      );
+                    }
+                    // Check if it looks like a stringified array or object
+                    // Also check for Python-style dictionaries with single quotes
+                    else if (
+                      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+                      (trimmed.startsWith('{') && trimmed.endsWith('}'))
+                    ) {
+                      try {
+                        // Try to parse it as JSON
+                        const nestedParsed = JSON.parse(value);
+                        fixedArgs[key] = nestedParsed;
+                        hasNestedStringification = true;
+                        this.logger.debug(
+                          () =>
+                            `[Qwen Fix] Fixed nested stringification in property '${key}' for ${toolCall.function.name}`,
+                        );
+                      } catch {
+                        // Try to convert Python-style to JSON (single quotes to double quotes)
+                        try {
+                          const jsonified = value
+                            .replace(/'/g, '"')
+                            .replace(/: True/g, ': true')
+                            .replace(/: False/g, ': false')
+                            .replace(/: None/g, ': null');
+                          const nestedParsed = JSON.parse(jsonified);
+                          fixedArgs[key] = nestedParsed;
+                          hasNestedStringification = true;
+                          this.logger.debug(
+                            () =>
+                              `[Qwen Fix] Fixed Python-style nested stringification in property '${key}' for ${toolCall.function.name}`,
+                          );
+                        } catch {
+                          // Not valid JSON even after conversion, keep as string
+                          fixedArgs[key] = value;
+                        }
+                      }
+                    } else {
+                      fixedArgs[key] = value;
+                    }
+                  } else {
+                    fixedArgs[key] = value;
+                  }
+                }
+
+                if (hasNestedStringification) {
+                  this.logger.debug(
+                    () =>
+                      `[Qwen Fix] Fixed nested double-stringification for ${toolCall.function.name}`,
+                  );
+                  return {
+                    ...toolCall,
+                    function: {
+                      ...toolCall.function,
+                      arguments: JSON.stringify(fixedArgs),
+                    },
+                  };
+                }
+              } catch (_e) {
+                // If parsing fails, check for old-style double-stringification
+                if (
+                  toolCall.function.arguments.startsWith('"') &&
+                  toolCall.function.arguments.endsWith('"')
+                ) {
+                  try {
+                    // Old fix: entire arguments were double-stringified
+                    const parsedArgs = JSON.parse(toolCall.function.arguments);
+                    this.logger.debug(
+                      () =>
+                        `[Qwen Fix] Fixed whole-argument double-stringification for ${toolCall.function.name}`,
+                    );
+                    return {
+                      ...toolCall,
+                      function: {
+                        ...toolCall.function,
+                        arguments: JSON.stringify(parsedArgs),
+                      },
+                    };
+                  } catch {
+                    // Leave as-is if we can't parse
+                  }
+                }
+              }
+            }
+            // No fix needed
+            this.logger.debug(
+              () =>
+                `[Qwen Fix] No double-stringification detected for ${toolCall.function.name}, keeping original`,
+            );
+            return toolCall;
+          });
+        }
+
+        if (this.isUsingQwen()) {
+          this.logger.debug(
+            () =>
+              `Final message with tool calls: ${JSON.stringify({
+                contentLength: fullContent.length,
+                content:
+                  fullContent.substring(0, 200) +
+                  (fullContent.length > 200 ? '...' : ''),
+                toolCallCount: accumulatedToolCalls.length,
+                hasStreamedContent,
+              })}`,
+          );
+        }
+
+        // For Qwen models, don't duplicate content if we've already streamed it
+        const shouldOmitContent = hasStreamedContent && this.isUsingQwen();
+
+        this.logger.debug(
+          () => '[Tool Call Handling] Deciding how to yield tool calls',
+          {
+            hasStreamedContent,
+            isUsingQwen: this.isUsingQwen(),
+            shouldOmitContent,
+            fullContentLength: fullContent.length,
+            toolCallCount: fixedToolCalls?.length || 0,
+          },
+        );
+
+        if (shouldOmitContent) {
+          // Qwen: Send just a space to prevent stream stopping
+          const syntheticResponse = {
+            choices: [{
+              message: {
+                content: ' ', // Single space instead of empty to keep stream alive
+                tool_calls: fixedToolCalls
+              },
+              finish_reason: 'tool_calls'
+            }],
+            usage: usageData
+          };
+          yield this.messageToContent(adapter.fromOpenAIComplete(syntheticResponse));
+        } else {
+          // Include full content with tool calls
+          const syntheticResponse = {
+            choices: [{
+              message: {
+                content: fullContent || '',
+                tool_calls: fixedToolCalls
+              },
+              finish_reason: 'tool_calls'
+            }],
+            usage: usageData
+          };
+          yield this.messageToContent(adapter.fromOpenAIComplete(syntheticResponse));
+        }
+      } else if (usageData) {
+        // Always emit usage data so downstream consumers can update stats
+        const syntheticResponse = {
+          choices: [{
+            message: { content: '', tool_calls: null },
+            finish_reason: 'stop'
+          }],
+          usage: usageData
+        };
+        yield this.messageToContent(adapter.fromOpenAIComplete(syntheticResponse));
+      }
+    }
+  }
+
+  override setModel(modelId: string): void {
+    // Update SettingsService as the source of truth
+    this.setModelInSettings(modelId).catch((error) => {
+      this.logger.debug(
+        () => `Failed to persist model to SettingsService: ${error}`,
+      );
+    });
+    // Keep local cache for performance
+    this.currentModel = modelId;
+  }
+
+  override getCurrentModel(): string {
+    // Try to get from SettingsService first (source of truth)
+    try {
+      const settingsService = getSettingsService();
+      const providerSettings = settingsService.getProviderSettings(this.name);
+      if (providerSettings.model) {
+        return providerSettings.model as string;
+      }
+    } catch (error) {
+      this.logger.debug(
+        () => `Failed to get model from SettingsService: ${error}`,
+      );
+    }
+    // Fall back to cached value or default
+    return this.currentModel || this.getDefaultModel();
+  }
+
+  override getDefaultModel(): string {
+    // Return the default model for this provider
+    // This can be overridden based on configuration or endpoint
+    if (this.isUsingQwen()) {
+      return 'qwen3-coder-plus';
+    }
+    return process.env.LLXPRT_DEFAULT_MODEL || 'gpt-5';
+  }
+
+  override setApiKey(apiKey: string): void {
+    // Call base provider implementation
+    super.setApiKey?.(apiKey);
+
+    // Persist to SettingsService if available
+    this.setApiKeyInSettings(apiKey).catch((error) => {
+      this.logger.debug(
+        () => `Failed to persist API key to SettingsService: ${error}`,
+      );
+    });
+
+    // Create a new OpenAI client with the updated API key
+    const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
+      apiKey,
+      dangerouslyAllowBrowser:
+        this.providerConfig?.allowBrowserEnvironment || false,
+    };
+    // Only include baseURL if it's defined
+    if (this.baseURL) {
+      clientOptions.baseURL = this.baseURL;
+    }
+    this.openai = new OpenAI(clientOptions);
+    this._cachedClientKey = apiKey; // Update cached key
+  }
+
+  override setBaseUrl(baseUrl?: string): void {
+    // If no baseUrl is provided, clear to default (undefined)
+    this.baseURL = baseUrl && baseUrl.trim() !== '' ? baseUrl : undefined;
+
+    // Persist to SettingsService if available
+    this.setBaseUrlInSettings(this.baseURL).catch((error) => {
+      this.logger.debug(
+        () => `Failed to persist base URL to SettingsService: ${error}`,
+      );
+    });
+
+    // Update OAuth configuration based on endpoint validation
+    // Enable OAuth for Qwen endpoints if we have an OAuth manager
+    const shouldEnableQwenOAuth =
+      !!this.baseProviderConfig.oauthManager &&
+      (isQwenEndpoint(this.baseURL || '') ||
+        this.baseURL === 'https://portal.qwen.ai/v1');
+
+    this.updateOAuthConfig(
+      shouldEnableQwenOAuth,
+      shouldEnableQwenOAuth ? 'qwen' : undefined,
+      this.baseProviderConfig.oauthManager, // Pass the existing OAuth manager
+    );
+
+    // Call base provider implementation
+    super.setBaseUrl?.(baseUrl);
+
+    // Create a new OpenAI client with the updated (or cleared) base URL
+    const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
+      // Use existing key or empty string as placeholder
+      apiKey: this._cachedClientKey || 'placeholder',
+      dangerouslyAllowBrowser:
+        this.providerConfig?.allowBrowserEnvironment || false,
+    };
+    // Only include baseURL if it's defined
+    if (this.baseURL) {
+      clientOptions.baseURL = this.baseURL;
+    }
+    this.openai = new OpenAI(clientOptions);
+    // Clear cached key to force re-resolution on next API call
+    this._cachedClientKey = undefined;
+  }
+
+  override setConfig(config: IProviderConfig): void {
+    this.providerConfig = config;
+  }
+
+  override setToolFormatOverride(format: ToolFormat | null): void {
+    this.toolFormatOverride = format || undefined;
+  }
+
+  /**
+   * Estimates the remote context usage for the current conversation
+   * @param conversationId The conversation ID
+   * @param parentId The parent message ID
+   * @param promptMessages The messages being sent in the current prompt
+   * @returns Context usage information including remote tokens
+   */
+  estimateContextUsage(
+    conversationId: string | undefined,
+    parentId: string | undefined,
+    promptMessages: OpenAIMessage[],
+  ) {
+    const promptTokens = estimateMessagesTokens(promptMessages);
+
+    // Token estimation should be handled at a higher level
+    // Providers should be stateless
+    // Return a mock response with expected shape for now
+    const contextLimit = 128000; // Default for gpt-4o
+    return {
+      promptTokens,
+      remoteTokens: 0,
+      totalTokens: promptTokens,
+      tokensRemaining: contextLimit - promptTokens,
+      contextUsedPercent: (promptTokens / contextLimit) * 100,
+    };
+  }
+
+  /**
+   * Get the conversation cache instance
+   * @returns null - providers no longer have caches
+   * @deprecated Providers are now stateless
+   */
+  getConversationCache(): null {
+    // Providers should be stateless - no cache
+    return null;
+  }
+
+  /**
+   * OpenAI always requires payment (API key)
+   */
+  override isPaidMode(): boolean {
+    return true;
+  }
+
+  override clearState(): void {
+    // No state to clear - providers are stateless
+  }
+
+  /**
+   * Get the list of server tools supported by this provider
+   */
+  override getServerTools(): string[] {
+    return [];
+  }
+
+  /**
+   * Invoke a server tool (native provider tool)
+   */
+  override async invokeServerTool(
+    _toolName: string,
+    _params: unknown,
+    _config?: unknown,
+  ): Promise<unknown> {
+    throw new Error('Server tools not supported by OpenAI provider');
+  }
+
+  /**
+   * Set model parameters to be included in API calls
+   * @param params Parameters to merge with existing, or undefined to clear all
+   */
+  override setModelParams(params: Record<string, unknown> | undefined): void {
+    if (params === undefined) {
+      this.modelParams = undefined;
+    } else {
+      this.modelParams = { ...this.modelParams, ...params };
+    }
+
+    // Persist to SettingsService if available
+    this.setModelParamsInSettings(this.modelParams).catch((error) => {
+      this.logger.debug(
+        () => `Failed to persist model params to SettingsService: ${error}`,
+      );
+    });
+  }
+
+  /**
+   * Get current model parameters
+   * @returns Current parameters or undefined if not set
+   */
+  override getModelParams(): Record<string, unknown> | undefined {
+    return this.modelParams;
+  }
+
+  /**
+   * Set temporary system instruction for the next generateChatCompletion call
+   */
+  override setTemporarySystemInstruction(
+    systemInstruction: string | undefined,
+  ): void {
+    this.temporarySystemInstruction = systemInstruction;
+  }
+
+  /**
+   * Initialize provider configuration from SettingsService
+   */
+  private async initializeFromSettings(): Promise<void> {
+    try {
+      // Load saved model if available
+      const savedModel = await this.getModelFromSettings();
+      if (savedModel) {
+        this.currentModel = savedModel;
+      }
+
+      // Load saved base URL if available
+      const savedBaseUrl = await this.getBaseUrlFromSettings();
+      if (savedBaseUrl !== undefined) {
+        this.baseURL = savedBaseUrl;
+      }
+
+      // Load saved model parameters if available
+      const savedParams = await this.getModelParamsFromSettings();
+      if (savedParams) {
+        this.modelParams = savedParams;
+      }
+
+      this.logger.debug(
+        () =>
+          `Initialized from SettingsService - model: ${this.currentModel}, baseURL: ${this.baseURL}, params: ${JSON.stringify(this.modelParams)}`,
+      );
+    } catch (error) {
+      this.logger.debug(
+        () =>
+          `Failed to initialize OpenAI provider from SettingsService: ${error}`,
+      );
+    }
+  }
+
+  /**
+   * Check if the provider is authenticated using any available method
+   * Uses the base provider's isAuthenticated implementation
+   */
+  override async isAuthenticated(): Promise<boolean> {
+    return super.isAuthenticated();
+  }
+
+  /**
+   * Detect the appropriate tool format for the current model/configuration
+   * @returns The detected tool format
+   */
+  detectToolFormat(): ToolFormat {
+    try {
+      const settingsService = getSettingsService();
+
+      // First check SettingsService for toolFormat override in provider settings
+      // Note: This is synchronous access to cached settings, not async
+      const currentSettings = settingsService['settings'];
+      const providerSettings = currentSettings?.providers?.[this.name];
+      const toolFormatOverride = providerSettings?.toolFormat as
+        | ToolFormat
+        | 'auto'
+        | undefined;
+
+      // If explicitly set to a specific format (not 'auto'), use it
+      if (toolFormatOverride && toolFormatOverride !== 'auto') {
+        return toolFormatOverride;
+      }
+
+      // Auto-detect based on model name if set to 'auto' or not set
+      const modelName = this.currentModel.toLowerCase();
+
+      // Check for GLM-4.5 models (glm-4.5, glm-4-5)
+      if (modelName.includes('glm-4.5') || modelName.includes('glm-4-5')) {
+        return 'qwen';
+      }
+
+      // Check for qwen models
+      if (modelName.includes('qwen')) {
+        return 'qwen';
+      }
+
+      // Default to 'openai' format
+      return 'openai';
+    } catch (error) {
+      this.logger.debug(
+        () => `Failed to detect tool format from SettingsService: ${error}`,
+      );
+
+      // Fallback detection without SettingsService
+      const modelName = this.currentModel.toLowerCase();
+
+      if (modelName.includes('glm-4.5') || modelName.includes('glm-4-5')) {
+        return 'qwen';
+      }
+
+      if (modelName.includes('qwen')) {
+        return 'qwen';
+      }
+
+      return 'openai';
+    }
+  }
+
+  /**
+   * Get appropriate tool_choice value based on detected tool format
+   * @param tools Array of tools (if any)
+   * @returns Appropriate tool_choice value for the current format
+   */
+  private getToolChoiceForFormat(
+    tools: ITool[] | undefined,
+  ): OpenAI.Chat.Completions.ChatCompletionToolChoiceOption | undefined {
+    if (!tools || tools.length === 0) {
+      return undefined;
+    }
+
+    // For all formats, use 'auto' (standard behavior)
+    // Future enhancement: different formats may need different tool_choice values
+    return 'auto';
+  }
+
+  /**
+   * Format tools for API based on detected tool format
+   * @param tools Array of tools to format
+   * @returns Formatted tools for API consumption
+   */
+  formatToolsForAPI(tools: ITool[]): unknown {
+    // For now, always use OpenAI format through OpenRouter
+    // const detectedFormat = this.detectToolFormat();
+    // if (detectedFormat === 'qwen') {
+    //   // Convert OpenAI format to Qwen format: {name, description, parameters} without type/function wrapper
+    //   return tools.map((tool) => ({
+    //     name: tool.function.name,
+    //     description: tool.function.description,
+    //     parameters: tool.function.parameters,
+    //   }));
+    // }
+
+    // For all formats, use the existing ToolFormatter
+    return this.toolFormatter.toProviderFormat(tools, 'openai');
+  }
+
+  /**
+   * Parse tool response from API (placeholder for future response parsing)
+   * @param response The raw API response
+   * @returns Parsed tool response
+   */
+  parseToolResponse(response: unknown): unknown {
+    // For now, return the response as-is
+    return response;
+  }
+}

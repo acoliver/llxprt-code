@@ -1,0 +1,43 @@
+{
+  "task": "Fix Turn.ts integration issues found in Phase 36a verification",
+  "status": "completed",
+  "timestamp": "2025-08-31T00:00:00Z",
+  "description": "Fixed compilation errors in Turn.ts by updating references to work with cleaned up HistoryService API",
+  "changes": [
+    {
+      "file": "src/core/turn.ts",
+      "description": "Fixed HistoryState.TOOLS_EXECUTING reference to use HistoryState.TRANSACTION_ACTIVE",
+      "line": 509
+    },
+    {
+      "file": "src/core/turn.ts",
+      "description": "Fixed commitTransaction() method call to remove transactionId parameter",
+      "line": 465
+    },
+    {
+      "file": "src/core/turn.ts",
+      "description": "Fixed rollbackTransaction() method call to pass reason string instead of transactionId",
+      "line": 481
+    },
+    {
+      "file": "src/core/turn.ts",
+      "description": "Fixed addToolResponseToTransaction() calls to properly create ToolResponse objects",
+      "lines": [410, 435]
+    },
+    {
+      "file": "src/core/turn.ts",
+      "description": "Fixed addAssistantMessageToTransaction() call to remove transactionId parameter",
+      "line": 460
+    }
+  ],
+  "verification": {
+    "compilation": "Turn.ts now compiles successfully without errors",
+    "integration": "All HistoryService method calls now match the correct API signatures"
+  },
+  "issues_fixed": [
+    "HistoryState.TOOLS_EXECUTING does not exist - changed to TRANSACTION_ACTIVE",
+    "Method signature mismatches for transaction methods - corrected all parameters",
+    "ToolResponse type violations - created proper ToolResponse objects",
+    "Unused import warnings - resolved by explicit type usage"
+  ]
+}

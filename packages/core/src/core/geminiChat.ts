@@ -411,124 +411,13 @@ export class GeminiChat {
       params.message,
     );
     // Don't use curated history - it filters out model messages with only tool calls
-    const requestContents = this.getHistory(false).concat(userContent);
+    const historyBeforeUser = this.getHistory(false);
 
-    // Fix orphaned tool calls (non-streaming version) - same logic as streaming
-    const toolCalls = new Map<string, { name: string; messageIndex: number }>();
-    const toolResponses = new Set<string>();
+    // Note: Orphan prevention is now handled automatically by HistoryService.addMessage()
+    // when a user message is added while tool calls are pending
 
-    // Scan BACKWARDS from the end until we find a tool response (then stop)
-    let foundToolResponse = false;
-    for (
-      let idx = requestContents.length - 1;
-      idx >= 0 && !foundToolResponse;
-      idx--
-    ) {
-      const content = requestContents[idx];
-
-      // Check for tool responses in user messages
-      if (content.role === 'user' && content.parts) {
-        for (const part of content.parts) {
-          if ('functionResponse' in part && part.functionResponse) {
-            const responseId = (part.functionResponse as { id?: string }).id;
-            if (responseId) {
-              toolResponses.add(responseId);
-              foundToolResponse = true; // Stop scanning - everything before this is already paired
-            }
-          }
-        }
-      }
-
-      // Track tool calls in model messages (only if we haven't found a response yet)
-      if (!foundToolResponse && content.role === 'model' && content.parts) {
-        for (const part of content.parts) {
-          if ('functionCall' in part && part.functionCall?.id) {
-            toolCalls.set(part.functionCall.id, {
-              name: part.functionCall.name || 'unknown',
-              messageIndex: idx,
-            });
-          }
-        }
-      }
-    }
-
-    // Find orphaned calls (tool calls without matching responses)
-    const orphanedCalls: Array<{
-      id: string;
-      name: string;
-      messageIndex: number;
-    }> = [];
-    for (const [id, info] of toolCalls) {
-      if (!toolResponses.has(id)) {
-        orphanedCalls.push({
-          id,
-          name: info.name,
-          messageIndex: info.messageIndex,
-        });
-      }
-    }
-
-    if (orphanedCalls.length > 0) {
-      this.logger.debug(
-        () =>
-          `[sendMessage] Found ${orphanedCalls.length} orphaned tool call(s), inserting synthetic responses`,
-      );
-
-      // Group orphaned calls by messageIndex to handle parallel calls correctly
-      const orphansByMessage = new Map<number, typeof orphanedCalls>();
-      for (const orphan of orphanedCalls) {
-        if (!orphansByMessage.has(orphan.messageIndex)) {
-          orphansByMessage.set(orphan.messageIndex, []);
-        }
-        orphansByMessage.get(orphan.messageIndex)!.push(orphan);
-      }
-
-      // Sort message indices DESCENDING to insert back-to-front
-      const sortedMessageIndices = Array.from(orphansByMessage.keys()).sort(
-        (a, b) => b - a,
-      );
-
-      // Insert synthetic responses back-to-front (so indices don't shift)
-      for (const messageIndex of sortedMessageIndices) {
-        const orphansAtIndex = orphansByMessage.get(messageIndex)!;
-
-        this.logger.debug(
-          () =>
-            `  - Fixing ${orphansAtIndex.length} orphaned calls at message ${messageIndex}`,
-        );
-
-        // Create a single response with multiple parts for parallel calls
-        const syntheticResponse: Content = {
-          role: 'user',
-          parts: orphansAtIndex.map((orphan) => ({
-            functionResponse: {
-              id: orphan.id,
-              name: orphan.name,
-              response: {
-                error:
-                  '[Operation Cancelled] Tool call was interrupted by user',
-              },
-            },
-          })),
-        };
-
-        // Insert RIGHT AFTER the model message with the orphaned calls
-        requestContents.splice(messageIndex + 1, 0, syntheticResponse);
-      }
-
-      // Also update the actual history to make this permanent
-      // History is now managed by HistoryService, no direct assignment needed
-      // The synthetic responses are already added to the request contents
-
-      this.logger.debug(
-        () =>
-          `[sendMessage] Fixed ${orphanedCalls.length} orphaned tool calls in history`,
-      );
-      this.logger.debug(
-        () =>
-          `[sendMessage] Updated requestContents now has ${requestContents.length} messages`,
-      );
-    }
+    // NOW add the user message to create the final request contents
+    const requestContents = [...historyBeforeUser, userContent];
 
     this._logApiRequest(requestContents, this.config.getModel(), prompt_id);
 
@@ -662,127 +551,15 @@ export class GeminiChat {
       params.message,
     );
 
-    // Add user content to history ONCE before any attempts.
-    const role = this.convertContentRole(userContent.role);
-    const messageContent = this.extractContentText(userContent);
-    const metadata = {
-      timestamp: Date.now(),
-      source: 'geminiChat',
-      contentType: this.getContentType(userContent),
-      originalContent: userContent,
-    };
-    this.historyService.addMessage(messageContent, role, metadata);
-    // Don't use curated history - it filters out model messages with only tool calls
-    const requestContents = this.getHistory(false);
+    // DON'T add user content here - recordHistory will handle it to avoid duplicates
+    // Get history WITHOUT the current user message (it will be added by recordHistory)
+    const historyBeforeUser = this.getHistory(false);
 
-    // Fix orphaned tool calls (streaming version) - same logic as non-streaming
-    const toolCalls = new Map<string, { name: string; messageIndex: number }>();
-    const toolResponses = new Set<string>();
+    // Note: Orphan prevention is now handled automatically by HistoryService.addMessage()
+    // when a user message is added while tool calls are pending
 
-    // Scan BACKWARDS from the end until we find a tool response (then stop)
-    let foundToolResponse = false;
-    for (
-      let idx = requestContents.length - 1;
-      idx >= 0 && !foundToolResponse;
-      idx--
-    ) {
-      const content = requestContents[idx];
-
-      // Check for tool responses in user messages
-      if (content.role === 'user' && content.parts) {
-        for (const part of content.parts) {
-          if ('functionResponse' in part && part.functionResponse) {
-            const responseId = (part.functionResponse as { id?: string }).id;
-            if (responseId) {
-              toolResponses.add(responseId);
-              foundToolResponse = true; // Stop scanning - everything before this is already paired
-            }
-          }
-        }
-      }
-
-      // Track tool calls in model messages (only if we haven't found a response yet)
-      if (!foundToolResponse && content.role === 'model' && content.parts) {
-        for (const part of content.parts) {
-          if ('functionCall' in part && part.functionCall?.id) {
-            toolCalls.set(part.functionCall.id, {
-              name: part.functionCall.name || 'unknown',
-              messageIndex: idx,
-            });
-          }
-        }
-      }
-    }
-
-    // Find orphaned calls (tool calls without matching responses)
-    const orphanedCalls: Array<{
-      id: string;
-      name: string;
-      messageIndex: number;
-    }> = [];
-    for (const [id, info] of toolCalls) {
-      if (!toolResponses.has(id)) {
-        orphanedCalls.push({
-          id,
-          name: info.name,
-          messageIndex: info.messageIndex,
-        });
-      }
-    }
-
-    if (orphanedCalls.length > 0) {
-      this.logger.debug(
-        () =>
-          `[sendMessageStream] Found ${orphanedCalls.length} orphaned tool call(s), inserting synthetic responses`,
-      );
-
-      // Group orphaned calls by messageIndex to handle parallel calls correctly
-      const orphansByMessage = new Map<number, typeof orphanedCalls>();
-      for (const orphan of orphanedCalls) {
-        if (!orphansByMessage.has(orphan.messageIndex)) {
-          orphansByMessage.set(orphan.messageIndex, []);
-        }
-        orphansByMessage.get(orphan.messageIndex)!.push(orphan);
-      }
-
-      // Sort message indices DESCENDING to insert back-to-front
-      const sortedMessageIndices = Array.from(orphansByMessage.keys()).sort(
-        (a, b) => b - a,
-      );
-
-      // Insert synthetic responses back-to-front (so indices don't shift)
-      for (const messageIndex of sortedMessageIndices) {
-        const orphansAtIndex = orphansByMessage.get(messageIndex)!;
-
-        this.logger.debug(
-          () =>
-            `  - Fixing ${orphansAtIndex.length} orphaned calls at message ${messageIndex}`,
-        );
-
-        // Create a single response with multiple parts for parallel calls
-        const syntheticResponse: Content = {
-          role: 'user',
-          parts: orphansAtIndex.map((orphan) => ({
-            functionResponse: {
-              id: orphan.id,
-              name: orphan.name,
-              response: {
-                error:
-                  '[Operation Cancelled] Tool call was interrupted by user',
-              },
-            },
-          })),
-        };
-
-        // Insert RIGHT AFTER the model message with the orphaned calls
-        requestContents.splice(messageIndex + 1, 0, syntheticResponse);
-      }
-
-      this.logger.debug(
-        () =>
-          `[sendMessageStream] Fixed ${orphanedCalls.length} orphaned tool calls in history`,
-      );
-    }
+    // NOW add the user message to create the final request contents
+    const requestContents = [...historyBeforeUser, userContent];
 
     // Use arrow function to preserve 'this' context
     const streamGenerator = async function* (
@@ -947,10 +724,16 @@ export class GeminiChat {
     const messageContent = this.extractContentText(content);
     const metadata = {
       timestamp: Date.now(),
-      source: 'geminiChat',
+      source: 'geminiChat.addHistory',
       contentType: this.getContentType(content),
       originalContent: content,
     };
+
+    // Log what we're adding to help detect duplicates
+    geminiChatLogger.debug(
+      () =>
+        `[HISTORY] Adding to history via addHistory: role=${role}, content=${messageContent.substring(0, 100)}`,
+    );
 
     this.historyService.addMessage(messageContent, role, metadata);
   }
@@ -1106,9 +889,16 @@ export class GeminiChat {
         // Convert Content to service format
         const messageContent = this.extractContentForService(userInput);
         const role = this.convertContentToServiceRole(userInput.role);
+
+        // Check if this is a tool response (has functionResponse parts)
+        const hasFunctionResponses =
+          userInput.parts?.some((part) => 'functionResponse' in part) ?? false;
+
         const metadata = {
           timestamp: Date.now(),
-          source: 'geminiChat.recordHistory',
+          source: hasFunctionResponses
+            ? 'geminiChat.toolResponse'
+            : 'geminiChat.userInput',
           originalContent: userInput,
           contentType: this.detectContentType(userInput),
         };
@@ -1438,10 +1228,53 @@ export class GeminiChat {
     const originalContent = message.metadata?.originalContent as Content;
     if (originalContent) return originalContent;
 
-    return {
-      role: message.role.toLowerCase(),
-      parts: [{ text: message.content }],
-    };
+    // Map HistoryService messages to Gemini Content with tool semantics
+    // 1) Assistant/model message with toolCalls => model role with functionCall parts
+    if (
+      (message.role === MessageRoleEnum.ASSISTANT ||
+        message.role === MessageRoleEnum.MODEL) &&
+      message.toolCalls &&
+      message.toolCalls.length > 0
+    ) {
+      const parts = message.toolCalls.map((call) => ({
+        functionCall: {
+          id: call.id,
+          name: call.name,
+          args:
+            call.arguments && typeof call.arguments === 'object'
+              ? (call.arguments as Record<string, unknown>)
+              : {},
+        },
+      }));
+      return { role: 'model', parts };
+    }
+
+    // 2) Tool message with toolResponses (paired with toolCalls) => user role with functionResponse parts
+    if (
+      message.role === MessageRoleEnum.TOOL &&
+      message.toolResponses &&
+      message.toolResponses.length > 0
+    ) {
+      const parts = message.toolResponses.map((resp, idx) => {
+        const call = message.toolCalls?.[idx];
+        return {
+          functionResponse: {
+            id: resp.toolCallId,
+            name: call?.name || 'tool',
+            response:
+              resp.error !== undefined ? { error: resp.error } : resp.result,
+          },
+        } as Part;
+      });
+      return { role: 'user', parts };
+    }
+
+    // 3) Plain user/model/system messages -> text parts
+    const role =
+      message.role === MessageRoleEnum.ASSISTANT
+        ? 'model'
+        : (message.role as 'user' | 'model' | 'system');
+    return { role, parts: [{ text: message.content }] };
   }
 
   // Unused after HistoryService integration

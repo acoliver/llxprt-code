@@ -82,6 +82,10 @@ class MockOpenAIProvider implements IProvider {
     };
   }
 
+  async *generateChatCompletionEx() {
+    throw new Error('generateChatCompletionEx not implemented in mock');
+  }
+
   async getModels() {
     return [
       {
@@ -182,6 +186,10 @@ class MockAlternativeProvider implements IProvider {
         timestamp: number;
       };
     };
+  }
+
+  async *generateChatCompletionEx() {
+    throw new Error('generateChatCompletionEx not implemented in mock');
   }
 
   async getModels() {

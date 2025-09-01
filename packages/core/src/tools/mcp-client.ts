@@ -852,7 +852,6 @@ export async function connectToMcpServer(
   };
 
   // patch Client.callTool to use request timeout as genai McpCallTool.callTool does not do it
-  // TODO: remove this hack once GenAI SDK does callTool with request options
   if ('callTool' in mcpClient) {
     const origCallTool = mcpClient.callTool.bind(mcpClient);
     mcpClient.callTool = function (params, resultSchema, options) {

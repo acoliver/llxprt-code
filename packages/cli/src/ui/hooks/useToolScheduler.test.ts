@@ -29,7 +29,6 @@ import {
   ToolInvocation,
   AnyDeclarativeTool,
   AnyToolInvocation,
-  Turn,
 } from '@vybestack/llxprt-code-core';
 import {
   HistoryItemWithoutId,
@@ -57,15 +56,6 @@ const mockConfig = {
   getUsageStatisticsEnabled: () => true,
   getDebugMode: () => false,
 };
-
-// Mock Turn instance
-const mockTurn = {
-  handleToolExecutionComplete: vi.fn(),
-  handleToolExecutionError: vi.fn(),
-  historyService: {
-    addPendingToolCalls: vi.fn(),
-  },
-} as unknown as Turn;
 
 class MockToolInvocation extends BaseToolInvocation<object, ToolResult> {
   constructor(
@@ -190,7 +180,6 @@ describe('useReactToolScheduler in YOLO Mode', () => {
         setPendingHistoryItem,
         () => undefined,
         () => {},
-        mockTurn,
       ),
     );
 
@@ -345,7 +334,6 @@ describe('useReactToolScheduler', () => {
         setPendingHistoryItem,
         () => undefined,
         () => {},
-        mockTurn,
       ),
     );
 

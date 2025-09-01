@@ -540,6 +540,9 @@ describe('Model Parameters Isolation Between Providers', () => {
         async *generateChatCompletion() {
           yield { role: 'model', parts: [{ text: 'test' }] };
         },
+        async *generateChatCompletionEx() {
+          throw new Error('generateChatCompletionEx not implemented in mock');
+        },
         getServerTools: () => [],
         invokeServerTool: async () => ({ result: 'test' }),
         // No model param methods
@@ -678,6 +681,10 @@ function createMockProvider(name: string): IProvider {
 
     async *generateChatCompletion() {
       yield { role: 'model', parts: [{ text: `Response from ${name}` }] };
+    },
+
+    async *generateChatCompletionEx() {
+      throw new Error('generateChatCompletionEx not implemented in mock');
     },
 
     getServerTools: () => [],

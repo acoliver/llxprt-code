@@ -2,6 +2,11 @@
 
 export { HistoryService } from './HistoryService.js';
 export {
+  getHistoryService,
+  resetHistoryService,
+  setHistoryService,
+} from './historyServiceInstance.js';
+export {
   Message,
   MessageRole,
   MessageMetadata,

@@ -46,6 +46,7 @@ import {
   ServerGeminiUsageMetadataEvent,
 } from '../../core/turn.js';
 import { DebugLogger } from '../../debug/index.js';
+import type { Message as HistoryMessage } from '../../services/history/types.js';
 
 /**
  * Wrapper that makes any IProvider compatible with Gemini's ContentGenerator interface
@@ -57,6 +58,93 @@ export class GeminiCompatibleWrapper {
 
   constructor(provider: Provider) {
     this.provider = provider;
+  }
+
+  /**
+   * Convert Content[] to HistoryMessage[] for the new bridge API
+   */
+  private contentsToHistoryMessages(contents: Content[]): HistoryMessage[] {
+    return contents.map((content, index) => {
+      const message: HistoryMessage = {
+        id: `msg_${Date.now()}_${index}`,
+        role: content.role === 'model' ? 'assistant' : (content.role as any),
+        content: '',
+        timestamp: Date.now(),
+        conversationId: '',
+        metadata: {},
+      };
+
+      // Extract content and tool calls from parts
+      if (content.parts) {
+        for (const part of content.parts) {
+          if ('text' in part && part.text) {
+            message.content += part.text;
+          }
+          if ('functionCall' in part && part.functionCall) {
+            if (!message.toolCalls) message.toolCalls = [];
+            message.toolCalls.push({
+              id:
+                (part.functionCall as any).id ||
+                `call_${Date.now()}_${Math.random()}`,
+              name: part.functionCall.name || 'unknown',
+              arguments: part.functionCall.args,
+            });
+          }
+          if ('functionResponse' in part && part.functionResponse) {
+            if (!message.toolResponses) message.toolResponses = [];
+            message.toolResponses.push({
+              toolCallId: (part.functionResponse as any).id || '',
+              result: part.functionResponse.response,
+            });
+          }
+        }
+      }
+
+      return message;
+    });
+  }
+
+  /**
+   * Convert HistoryMessage back to Content for Gemini compatibility
+   */
+  private historyMessageToContent(message: HistoryMessage): Content {
+    const content: Content = {
+      role: message.role === 'assistant' ? 'model' : (message.role as any),
+      parts: [],
+    };
+
+    // Add text content
+    if (message.content) {
+      content.parts!.push({ text: message.content });
+    }
+
+    // Add tool calls
+    if (message.toolCalls) {
+      for (const toolCall of message.toolCalls) {
+        content.parts!.push({
+          functionCall: {
+            name: toolCall.name,
+            args: toolCall.arguments as any,
+            id: toolCall.id,
+          } as any,
+        });
+      }
+    }
+
+    // Add tool responses
+    if (message.toolResponses) {
+      for (const toolResponse of message.toolResponses) {
+        content.parts!.push({
+          functionResponse: {
+            name: '', // We don't have the name in HistoryMessage
+            response: toolResponse.result,
+            id: toolResponse.toolCallId,
+          } as any,
+        });
+      }
+    }
+
+    return content;
   }
 
   /**
@@ -328,18 +416,25 @@ export class GeminiCompatibleWrapper {
      * @plan PLAN-20250826-RESPONSES.P05
      * @requirement REQ-001.2
      */
-    // Collect full response from provider stream using Content[] directly
-    const responseContents: Content[] = [];
-    const stream = this.provider.generateChatCompletion(
-      contents,
+    // Convert Content[] to HistoryMessage[] and use the new bridge API
+    const historyMessages = this.contentsToHistoryMessages(contents);
+    const responseMessages: HistoryMessage[] = [];
+
+    const stream = this.provider.generateChatCompletionEx(
+      historyMessages,
       undefined, // tools
       undefined, // toolFormat
       params.sessionId, // sessionId - now implemented
     );
 
-    for await (const chunk of stream) {
-      responseContents.push(chunk);
+    for await (const message of stream) {
+      responseMessages.push(message);
     }
+
+    // Convert back to Content[] for Gemini compatibility
+    const responseContents = responseMessages.map((msg) =>
+      this.historyMessageToContent(msg),
+    );
 
     // Convert provider response to Gemini format
     return this.convertContentsToResponse(responseContents);
@@ -496,9 +591,12 @@ export class GeminiCompatibleWrapper {
      * @plan PLAN-20250826-RESPONSES.P05
      * @requirement REQ-001.2
      */
-    // Stream from provider using Content[] directly - no conversion needed!
-    const stream = this.provider.generateChatCompletion(
-      contents,
+    // Convert Content[] to HistoryMessage[] and use the new bridge API
+    const historyMessages = this.contentsToHistoryMessages(contents);
+
+    // Stream from provider using the new bridge API
+    const stream = this.provider.generateChatCompletionEx(
+      historyMessages,
       providerTools,
       undefined, // toolFormat
       params.sessionId, // sessionId - now implemented
@@ -508,12 +606,14 @@ export class GeminiCompatibleWrapper {
     const collectedChunks: GenerateContentResponse[] = [];
     let hasUsageMetadata = false;
 
-    for await (const chunk of stream) {
-      const response = this.convertContentToStreamResponse(chunk);
+    for await (const message of stream) {
+      // Convert HistoryMessage back to Content for Gemini compatibility
+      const content = this.historyMessageToContent(message);
+      const response = this.convertContentToStreamResponse(content);
       collectedChunks.push(response);
 
-      // Check if this chunk has usage metadata (now checking Content format)
-      if ('usage' in chunk) {
+      // Check if this chunk has usage metadata
+      if (message.metadata?.usage) {
         hasUsageMetadata = true;
       }
 

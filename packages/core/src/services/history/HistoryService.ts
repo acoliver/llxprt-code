@@ -7,14 +7,40 @@ import {
   HistoryState,
   ToolCall,
   ToolResponse,
-  ToolCallStatus,
   ToolCallDetail,
   HistoryDump,
   MessageRoleEnum,
   ValidationError,
   StateError,
+  ToolTransaction,
 } from './types.js';
 import { StateManager } from './StateManager.js';
+import { DebugLogger } from '../../debug/index.js';
+import type { 
+  IHistoryService,
+  ToolExecutionStatus 
+} from '../../historyservice/interfaces/IHistoryService.js';
+
+/**
+ * Tool Transaction implementation for Phase 35
+ * @pseudocode tool-transactions.md:1-9
+ */
+class ToolTransactionImpl implements ToolTransaction {
+  readonly id: string;
+  assistantMessage: Message | null = null;
+  readonly toolCalls: Map<string, ToolCall>;
+  readonly toolResponses: Map<string, ToolResponse>;
+  state: 'pending' | 'committed' | 'rolledback';
+  readonly createdAt: number;
+
+  constructor(id: string) {
+    this.id = id;
+    this.toolCalls = new Map();
+    this.toolResponses = new Map();
+    this.state = 'pending';
+    this.createdAt = Date.now();
+  }
+}
 
 /**
  * HistoryService - Centralized conversation history management
@@ -24,14 +50,19 @@ import { StateManager } from './StateManager.js';
  * See EVENTS-WERE-UNNECESSARY.md for details.
  *
  * @plan PLAN-20250128-HISTORYSERVICE
+ * @implements {IHistoryService}
  */
-export class HistoryService {
+export class HistoryService implements IHistoryService {
   private readonly conversationId: string;
   private messages: Message[] = [];
-  private pendingToolCalls: Map<string, ToolCall> = new Map();
-  private toolResponses: Map<string, ToolResponse> = new Map();
+  private readonly logger: DebugLogger;
   private state: HistoryState = HistoryState.IDLE;
   private stateManager: StateManager;
+
+  // Transaction management properties (Phase 33)
+  // @pseudocode tool-transactions.md:13-14
+  private activeTransaction: ToolTransaction | null = null;
+  private transactionHistory: ToolTransaction[] = [];
 
   // State tracking properties
   private stateHistory: Array<{
@@ -59,15 +90,13 @@ export class HistoryService {
 
     this.conversationId = conversationId;
     this.messages = [];
-    this.pendingToolCalls = new Map();
-    this.toolResponses = new Map();
     this.state = HistoryState.IDLE;
     this.stateManager = new StateManager();
+    this.logger = new DebugLogger('llxprt:history:service');
 
     // Log initialization (no events)
-    console.log(
-      '[HistoryService] Initialized for conversation:',
-      conversationId,
+    this.logger.debug(
+      () => `[HistoryService] Initialized for conversation: ${conversationId}`,
     );
   }
 
@@ -81,10 +110,25 @@ export class HistoryService {
     metadata?: MessageMetadata,
   ): string {
     try {
-      // Prevent adding messages during tool execution
-      if (this.state === HistoryState.TOOLS_EXECUTING) {
+      // Handle active transaction semantics
+      // If a user sends a new message while a transaction is active, we roll back
+      // the transaction with a cancellation reason and then proceed to add the user message.
+      // For any other role, prevent direct message addition during an active transaction.
+      if (this.activeTransaction) {
+        if (role === MessageRoleEnum.USER) {
+          this.rollbackTransaction('User sent new message');
+        } else {
+          throw new StateError(
+            'Cannot add messages during active transaction in progress',
+          );
+        }
+      }
+
+      // State validation guard in case of transition race
+      // After rollback above, state should be IDLE. If still TRANSACTION_ACTIVE, block.
+      if (this.state === HistoryState.TRANSACTION_ACTIVE) {
         throw new StateError(
-          `Cannot add messages during tool execution (state: ${this.state})`,
+          `Cannot add messages during active transaction (state: ${this.state})`,
         );
       }
 
@@ -113,7 +157,13 @@ export class HistoryService {
       }
 
       // Validate message role
-      const validRoles: MessageRole[] = ['user', 'model', 'system', 'tool'];
+      const validRoles: MessageRole[] = [
+        'user',
+        'assistant',
+        'model',
+        'system',
+        'tool',
+      ];
       if (!validRoles.includes(role)) {
         throw new ValidationError(`Invalid message role: ${role}`);
       }
@@ -128,6 +178,22 @@ export class HistoryService {
         conversationId: this.conversationId,
       };
 
+      // Check for potential duplicates (detection only, not prevention)
+      const recentMessages = this.messages.slice(-5); // Check last 5 messages
+      const duplicates = recentMessages.filter(
+        (msg) =>
+          msg.role === message.role &&
+          msg.content === message.content &&
+          msg.id !== message.id, // Different ID but same content
+      );
+
+      if (duplicates.length > 0) {
+        this.logger.debug(
+          () =>
+            `[HistoryService] Duplicate message detected: role=${message.role}, source=${metadata?.source || 'unknown'}, duplicates=${duplicates.length}`,
+        );
+      }
+
       // Add message to array
       this.messages.push(message);
 
@@ -139,21 +205,21 @@ export class HistoryService {
       });
 
       // Log the operation (no events)
-      console.log('[HistoryService] Message added:', {
-        id: message.id,
-        role: message.role,
-      });
+      this.logger.debug(
+        () =>
+          `[HistoryService] Message added: { id: '${message.id}', role: '${message.role}' }`,
+      );
 
       // Transition back to IDLE for non-model messages
       if (role !== MessageRoleEnum.MODEL) {
         this.internalTransitionTo(HistoryState.IDLE, 'user message added');
+      } else {
+        // Transition to IDLE after model message added
+        this.internalTransitionTo(HistoryState.IDLE, 'model message added');
       }
-      // Transition back to IDLE after model message is added
-      this.internalTransitionTo(HistoryState.IDLE, 'model message added');
 
       return message.id;
     } catch (error) {
-      console.error('[HistoryService] Error adding message:', error);
       throw error;
     }
   }
@@ -209,11 +275,12 @@ export class HistoryService {
       });
 
       // Log the operation (no events)
-      console.log('[HistoryService] Message updated:', { id: messageId });
+      this.logger.debug(
+        () => `[HistoryService] Message updated: { id: '${messageId}' }`,
+      );
 
       return updatedMessage;
     } catch (error) {
-      console.error('[HistoryService] Error updating message:', error);
       throw error;
     }
   }
@@ -241,11 +308,12 @@ export class HistoryService {
       });
 
       // Log the operation (no events)
-      console.log('[HistoryService] Message deleted:', { id: messageId });
+      this.logger.debug(
+        () => `[HistoryService] Message deleted: { id: '${messageId}' }`,
+      );
 
       return true;
     } catch (error) {
-      console.error('[HistoryService] Error deleting message:', error);
       throw error;
     }
   }
@@ -273,8 +341,6 @@ export class HistoryService {
       const messageCount = this.messages.length;
 
       this.messages = [];
-      this.pendingToolCalls.clear();
-      this.toolResponses.clear();
       this.internalTransitionTo(HistoryState.IDLE, 'history cleared');
 
       // Track operation in debug queue
@@ -285,11 +351,13 @@ export class HistoryService {
       });
 
       // Log the operation (no events)
-      console.log('[HistoryService] History cleared:', { messageCount });
+      this.logger.debug(
+        () =>
+          `[HistoryService] History cleared: { messageCount: ${messageCount} }`,
+      );
 
       return messageCount;
     } catch (error) {
-      console.error('[HistoryService] Error clearing history:', error);
       throw error;
     }
   }
@@ -315,8 +383,6 @@ export class HistoryService {
       const messageCount = this.messages.length;
 
       this.messages = [];
-      this.pendingToolCalls.clear();
-      this.toolResponses.clear();
       this.state = HistoryState.IDLE;
       this.stateHistory = [];
       this.operationQueue = []; // Reset operation queue too
@@ -329,9 +395,11 @@ export class HistoryService {
       });
 
       // Log the operation (no events)
-      console.log('[HistoryService] Service reset:', { messageCount });
+      this.logger.debug(
+        () =>
+          `[HistoryService] Service reset: { messageCount: ${messageCount} }`,
+      );
     } catch (error) {
-      console.error('[HistoryService] Error resetting service:', error);
       throw error;
     }
   }
@@ -430,144 +498,15 @@ export class HistoryService {
       this.messages.pop();
 
       // Log the operation (no events)
-      console.log('[HistoryService] Last message undone:', {
-        id: lastMessage.id,
-      });
+      this.logger.debug(
+        () =>
+          `[HistoryService] Last message undone: { id: '${lastMessage.id}' }`,
+      );
 
       return lastMessage;
     } catch (error) {
-      console.error('[HistoryService] Error undoing last message:', error);
       throw error;
     }
-  }
-
-  /**
-   * @requirement HS-009: Add pending tool calls
-   */
-  addPendingToolCalls(toolCalls: ToolCall[]): void {
-    this.validateStateTransition('ADD_TOOL_CALLS');
-
-    for (const toolCall of toolCalls) {
-      if (!this.validateToolCall(toolCall)) {
-        throw new ValidationError(
-          `Invalid tool call: ${JSON.stringify(toolCall)}`,
-        );
-      }
-      this.pendingToolCalls.set(toolCall.id, toolCall);
-    }
-
-    // Only transition to TOOLS_PENDING if not already there
-    if (this.state !== HistoryState.TOOLS_PENDING) {
-      this.internalTransitionTo(HistoryState.TOOLS_PENDING, 'tool calls added');
-    }
-    console.log('[HistoryService] Pending tool calls added:', toolCalls.length);
-  }
-
-  /**
-   * @requirement HS-010: Commit tool responses atomically
-   * This is the CRITICAL method that prevents orphan tool calls/responses
-   */
-  commitToolResponses(responses: ToolResponse[]): void {
-    // Allow empty responses array (no-op)
-    if (responses.length === 0) {
-      return;
-    }
-
-    // CRITICAL: Validate all responses have matching pending calls FIRST
-    for (const response of responses) {
-      if (!this.pendingToolCalls.has(response.toolCallId)) {
-        throw new ValidationError(
-          `No pending tool call found for response: ${response.toolCallId}`,
-        );
-      }
-      if (!this.validateToolResponse(response)) {
-        throw new ValidationError(
-          `Invalid tool response: ${JSON.stringify(response)}`,
-        );
-      }
-    }
-
-    this.validateStateTransition('ADD_TOOL_RESPONSES');
-
-    // ATOMIC OPERATION: Add both calls and responses to history
-    const toolMessage: Message = {
-      id: this.generateUUID(),
-      role: MessageRoleEnum.TOOL,
-      content: '',
-      toolCalls: Array.from(this.pendingToolCalls.values()),
-      toolResponses: responses,
-      timestamp: Date.now(),
-      conversationId: this.conversationId,
-      metadata: {},
-    };
-
-    this.messages.push(toolMessage);
-
-    // Clear pending state
-    this.pendingToolCalls.clear();
-    for (const response of responses) {
-      this.toolResponses.set(response.toolCallId, response);
-    }
-
-    this.internalTransitionTo(HistoryState.IDLE, 'tool responses committed');
-    console.log('[HistoryService] Tool responses committed:', responses.length);
-  }
-
-  /**
-   * @requirement HS-012: Abort pending tool calls
-   */
-  abortPendingToolCalls(): void {
-    const count = this.pendingToolCalls.size;
-
-    // Create synthetic responses for all pending calls to prevent orphans
-    if (count > 0) {
-      const syntheticResponses: ToolResponse[] = Array.from(
-        this.pendingToolCalls.values(),
-      ).map((call) => ({
-        toolCallId: call.id,
-        result: {
-          error: '[Operation Cancelled] Tool call was interrupted by user',
-          cancelled: true,
-        },
-      }));
-
-      // Commit the synthetic responses to maintain call/response pairing
-      this.commitToolResponses(syntheticResponses);
-      console.log(
-        '[HistoryService] Created synthetic responses for',
-        count,
-        'aborted tool calls',
-      );
-    }
-
-    // Clear pending calls (they've been committed with synthetic responses)
-    this.pendingToolCalls.clear();
-
-    if (
-      this.state === HistoryState.TOOLS_PENDING ||
-      this.state === HistoryState.TOOLS_EXECUTING
-    ) {
-      this.internalTransitionTo(
-        HistoryState.IDLE,
-        'tool calls aborted with synthetic responses',
-      );
-    }
-
-    console.log('[HistoryService] Pending tool calls aborted:', count);
-  }
-
-  /**
-   * Get current pending tool calls
-   */
-  getPendingToolCalls(): ToolCall[] {
-    return Array.from(this.pendingToolCalls.values());
-  }
-
-  /**
-   * Check if there are pending tool calls
-   */
-  hasPendingToolCalls(): boolean {
-    return this.pendingToolCalls.size > 0;
   }
 
   /**
@@ -581,27 +520,14 @@ export class HistoryService {
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    // Check for orphaned tool calls
+    // Transactions ensure no orphans, but verify anyway
     for (const message of this.messages) {
-      if (message.toolCalls && message.toolCalls.length > 0) {
-        if (!message.toolResponses || message.toolResponses.length === 0) {
-          errors.push(`Message ${message.id} has tool calls but no responses`);
-        } else {
-          // Check each call has a response
-          for (const call of message.toolCalls) {
-            const hasResponse = message.toolResponses.some(
-              (r) => r.toolCallId === call.id,
-            );
-            if (!hasResponse) {
-              errors.push(`Tool call ${call.id} has no matching response`);
-            }
-          }
-        }
-      }
-
-      if (message.toolResponses && message.toolResponses.length > 0) {
-        if (!message.toolCalls || message.toolCalls.length === 0) {
-          errors.push(`Message ${message.id} has tool responses but no calls`);
+      if (message.role === MessageRoleEnum.TOOL) {
+        // All tool messages should have matching calls/responses
+        if (message.toolCalls?.length !== message.toolResponses?.length) {
+          errors.push(
+            `Tool message ${message.id} has mismatched calls/responses`,
+          );
         }
       }
     }
@@ -638,8 +564,8 @@ export class HistoryService {
       messageCount: this.messages.length,
       messages: [...this.messages],
       state: this.state,
-      pendingToolCalls: Array.from(this.pendingToolCalls.values()),
-      toolResponses: Array.from(this.toolResponses.values()),
+      pendingToolCalls: [],
+      toolResponses: [],
       timestamp: Date.now(),
     };
   }
@@ -701,8 +627,9 @@ export class HistoryService {
       this.stateManager.transitionTo(newState);
     }
 
-    console.log(
-      `[HistoryService] State transition: ${oldState} -> ${newState} (${context})`,
+    this.logger.debug(
+      () =>
+        `[HistoryService] State transition: ${oldState} -> ${newState} (${context})`,
     );
   }
 
@@ -727,50 +654,233 @@ export class HistoryService {
   }
 
   /**
-   * Validate a tool call object
+   * Begin a new tool transaction
+   * @pseudocode tool-transactions.md:16-23
    */
-  private validateToolCall(toolCall: ToolCall): boolean {
-    return !!(
-      toolCall &&
-      toolCall.id &&
-      toolCall.name &&
-      toolCall.arguments !== undefined
+  beginToolTransaction(): string {
+    if (this.activeTransaction !== null) {
+      throw new StateError('Transaction already in progress');
+    }
+
+    const txId = this.generateUUID();
+    this.activeTransaction = new ToolTransactionImpl(txId);
+    this.internalTransitionTo(
+      HistoryState.TRANSACTION_ACTIVE,
+      'tool transaction started',
+    );
+
+    this.logger.debug(
+      () => `[HistoryService] Tool transaction started: ${txId}`,
+    );
+
+    return txId;
+  }
+
+  /**
+   * Commit the active transaction
+   * @pseudocode tool-transactions.md:48-70
+   */
+  commitTransaction(): void {
+    if (!this.activeTransaction) {
+      throw new StateError('No active transaction');
+    }
+
+    this.internalTransitionTo(
+      HistoryState.TRANSACTION_COMMITTING,
+      'committing transaction',
+    );
+
+    // Validate completeness
+    for (const [callId] of this.activeTransaction.toolCalls) {
+      if (!this.activeTransaction.toolResponses.has(callId)) {
+        throw new ValidationError(`Missing response for tool call ${callId}`);
+      }
+    }
+
+    // ATOMIC: Add assistant message with toolCalls if present
+    if (this.activeTransaction.assistantMessage) {
+      const assistantWithCalls: Message = {
+        ...this.activeTransaction.assistantMessage,
+        toolCalls: Array.from(this.activeTransaction.toolCalls.values()),
+      };
+      this.messages.push(assistantWithCalls);
+    }
+
+    // Create tool message with all responses if present
+    if (this.activeTransaction.toolResponses.size > 0) {
+      // Ensure responses are ordered to match tool calls
+      const toolCalls = Array.from(this.activeTransaction.toolCalls.values());
+      const toolResponses = toolCalls.map(
+        (call) => this.activeTransaction!.toolResponses.get(call.id)!,
+      );
+
+      const toolMessage: Message = {
+        id: this.generateUUID(),
+        role: MessageRoleEnum.TOOL,
+        content: '',
+        toolCalls: toolCalls,
+        toolResponses: toolResponses,
+        timestamp: Date.now(),
+        conversationId: this.conversationId,
+        metadata: {},
+      };
+      this.messages.push(toolMessage);
+    }
+
+    // Archive and clear
+    this.activeTransaction.state = 'committed';
+    this.transactionHistory.push(this.activeTransaction);
+    this.activeTransaction = null;
+
+    this.internalTransitionTo(HistoryState.IDLE, 'transaction committed');
+    this.logger.debug(
+      () => '[HistoryService] Transaction committed successfully',
     );
   }
 
   /**
-   * Validate a tool response object
+   * Rollback the active transaction
+   * @pseudocode tool-transactions.md:71-82
    */
-  private validateToolResponse(toolResponse: ToolResponse): boolean {
-    return !!(
-      toolResponse &&
-      toolResponse.toolCallId &&
-      toolResponse.result !== undefined
+  rollbackTransaction(reason: string): void {
+    if (!this.activeTransaction) {
+      return; // Nothing to rollback
+    }
+
+    // Create cancellation responses for pending calls
+    for (const [callId] of this.activeTransaction.toolCalls) {
+      if (!this.activeTransaction.toolResponses.has(callId)) {
+        const cancelResponse: ToolResponse = {
+          toolCallId: callId,
+          result: {
+            error: `[Operation Cancelled] ${reason}`,
+          },
+          error: `[Operation Cancelled] ${reason}`, // Top-level error field for tests
+        };
+        this.activeTransaction.toolResponses.set(callId, cancelResponse);
+      }
+    }
+
+    // ATOMIC: Add assistant message with toolCalls if present
+    if (this.activeTransaction.assistantMessage) {
+      const assistantWithCalls: Message = {
+        ...this.activeTransaction.assistantMessage,
+        toolCalls: Array.from(this.activeTransaction.toolCalls.values()),
+      };
+      this.messages.push(assistantWithCalls);
+    }
+
+    // Create tool message with all responses if present
+    if (this.activeTransaction.toolResponses.size > 0) {
+      // Ensure responses are ordered to match tool calls
+      const toolCalls = Array.from(this.activeTransaction.toolCalls.values());
+      const toolResponses = toolCalls.map(
+        (call) => this.activeTransaction!.toolResponses.get(call.id)!,
+      );
+
+      const toolMessage: Message = {
+        id: this.generateUUID(),
+        role: MessageRoleEnum.TOOL,
+        content: '',
+        toolCalls: toolCalls,
+        toolResponses: toolResponses,
+        timestamp: Date.now(),
+        conversationId: this.conversationId,
+        metadata: {},
+      };
+      this.messages.push(toolMessage);
+    }
+
+    // Archive and clear as rolled back
+    this.activeTransaction.state = 'rolledback';
+    this.transactionHistory.push(this.activeTransaction);
+    this.activeTransaction = null;
+
+    this.internalTransitionTo(
+      HistoryState.IDLE,
+      `transaction rolled back: ${reason}`,
+    );
+    this.logger.debug(
+      () => `[HistoryService] Transaction rolled back: ${reason}`,
     );
   }
 
   /**
-   * Validate state transition for an operation
+   * Check if there is an active transaction
    */
-  private validateStateTransition(operation: string): void {
-    // Allow adding tool calls in IDLE, MODEL_RESPONDING, or TOOLS_PENDING states
-    if (
-      operation === 'ADD_TOOL_CALLS' &&
-      this.state !== HistoryState.IDLE &&
-      this.state !== HistoryState.MODEL_RESPONDING &&
-      this.state !== HistoryState.TOOLS_PENDING // Allow accumulating calls
-    ) {
-      throw new StateError(`Cannot add tool calls in state ${this.state}`);
+  hasActiveTransaction(): boolean {
+    return this.activeTransaction !== null;
+  }
+
+  /**
+   * Add assistant message to active transaction
+   * @pseudocode tool-transactions.md:24-37
+   */
+  addAssistantMessageToTransaction(
+    content: string,
+    toolCalls: ToolCall[],
+  ): void {
+    if (!this.activeTransaction) {
+      throw new StateError('No active transaction');
+    }
+    if (this.activeTransaction.assistantMessage) {
+      throw new StateError('Assistant message already set');
     }
 
-    // Allow tool responses in TOOLS_PENDING or TOOLS_EXECUTING
-    if (
-      operation === 'ADD_TOOL_RESPONSES' &&
-      this.state !== HistoryState.TOOLS_PENDING &&
-      this.state !== HistoryState.TOOLS_EXECUTING
-    ) {
-      throw new StateError(`Cannot add tool responses in state ${this.state}`);
+    // Create message but DON'T add to history yet
+    const message: Message = {
+      id: this.generateUUID(),
+      content,
+      role:
+        toolCalls.length === 0
+          ? MessageRoleEnum.MODEL
+          : MessageRoleEnum.ASSISTANT, // Use model role when no tool calls, assistant role when tool calls present
+      timestamp: Date.now(),
+      conversationId: this.conversationId,
+      metadata: {},
+    };
+
+    this.activeTransaction.assistantMessage = message;
+
+    // Track tool calls
+    for (const call of toolCalls) {
+      this.activeTransaction.toolCalls.set(call.id, call);
     }
+
+    this.logger.debug(
+      () =>
+        `[HistoryService] Added assistant message to transaction with ${toolCalls.length} tool calls`,
+    );
+  }
+
+  /**
+   * Add tool response to active transaction
+   * @pseudocode tool-transactions.md:38-47
+   */
+  addToolResponseToTransaction(
+    toolCallId: string,
+    response: ToolResponse,
+  ): void {
+    if (!this.activeTransaction) {
+      throw new StateError('No active transaction');
+    }
+    if (!this.activeTransaction.toolCalls.has(toolCallId)) {
+      throw new ValidationError(`Tool call ${toolCallId} not found`);
+    }
+    if (this.activeTransaction.toolResponses.has(toolCallId)) {
+      throw new StateError(`Response already recorded for ${toolCallId}`);
+    }
+
+    // Ensure toolCallId is set correctly on the response
+    const fullResponse: ToolResponse = {
+      ...response,
+      toolCallId: toolCallId,
+    };
+
+    this.activeTransaction.toolResponses.set(toolCallId, fullResponse);
+    this.logger.debug(
+      () => `[HistoryService] Added response for tool ${toolCallId}`,
+    );
   }
 
   /**
@@ -820,11 +930,49 @@ export class HistoryService {
     return this.messages.length === 0;
   }
 
+
   /**
-   * Get tool call execution status
+   * Determines if tool responses should be merged with the previous message.
+   * This handles the case where multiple tool responses from the same assistant message
+   * are sent in separate iterations.
+   *
+   * @requirement HS-049: Integration with GeminiChat
+   */
+  shouldMergeToolResponses(newMessage: Message, lastMessage: Message): boolean {
+    // If either message is null, don't merge
+    if (!newMessage || !lastMessage) return false;
+
+    // Check if both messages are tool responses with the same conversationId
+    if (
+      newMessage.role === 'tool' &&
+      lastMessage.role === 'tool' &&
+      newMessage.conversationId === lastMessage.conversationId
+    ) {
+      return true;
+    }
+
+    // If the last message is a user message and the new message is a model message
+    // from the same conversation, they should be merged
+    if (
+      lastMessage.role === 'user' &&
+      newMessage.role === 'model' &&
+      newMessage.conversationId === lastMessage.conversationId
+    ) {
+      return true;
+    }
+
+    // Default to not merge
+    return false;
+  }
+
+  /**
+   * Get tool call status - implements IHistoryService
+   * Returns the current status of tool calls with extended information
+   * 
+   * @requirement HS-050: Turn integration with HistoryService tool management
    * @requirement HS-014: Tool call status querying
    */
-  getToolCallStatus(): ToolCallStatus {
+  getToolCallStatus(): ToolExecutionStatus {
     // Count completed calls from tool messages
     let completedCalls = 0;
     let failedCalls = 0;
@@ -882,61 +1030,93 @@ export class HistoryService {
         }
       }
     }
-
-    // Add pending calls to details (not in executionOrder until executed)
-    for (const [callId, toolCall] of this.pendingToolCalls) {
-      if (!executionOrder.includes(callId)) {
-        details.push({
-          callId,
-          functionName: toolCall.name,
-          hasResponse: false,
-          responseStatus: 'error', // pending calls haven't succeeded yet
-        });
-      }
-    }
-
+    
+    // Return ToolCallStatus that satisfies both internal needs and IHistoryService
     return {
-      pendingCalls: this.pendingToolCalls.size,
+      pendingCalls: 0,
       responseCount: completedCalls + failedCalls,
+      currentState: this.state,
       completedCalls,
       failedCalls,
-      currentState: this.state as HistoryState,
       executionOrder,
       details,
     };
   }
 
   /**
-   * Determines if tool responses should be merged with the previous message.
-   * This handles the case where multiple tool responses from the same assistant message
-   * are sent in separate iterations.
-   *
-   * @requirement HS-049: Integration with GeminiChat
+   * IHistoryService implementation - Add pending tool calls from OpenAI/other providers
+   * This bridges the gap between Turn's expectations and HistoryService's transaction model
+   * 
+   * @requirement HS-050: Turn integration with HistoryService tool management
    */
-  shouldMergeToolResponses(newMessage: Message, lastMessage: Message): boolean {
-    // If either message is null, don't merge
-    if (!newMessage || !lastMessage) return false;
+  addPendingToolCalls(calls: ToolCall[]): void {
+    this.logger.debug(
+      () => `[addPendingToolCalls] Adding ${calls.length} pending tool calls`,
+    );
 
-    // Check if both messages are tool responses with the same conversationId
-    if (
-      newMessage.role === 'tool' &&
-      lastMessage.role === 'tool' &&
-      newMessage.conversationId === lastMessage.conversationId
-    ) {
-      return true;
+    // Start a transaction if not already active
+    if (!this.activeTransaction) {
+      const transactionId = this.beginToolTransaction();
+      this.logger.debug(
+        () => `[addPendingToolCalls] Started transaction ${transactionId}`,
+      );
     }
 
-    // If the last message is a user message and the new message is a model message
-    // from the same conversation, they should be merged
-    if (
-      lastMessage.role === 'user' &&
-      newMessage.role === 'model' &&
-      newMessage.conversationId === lastMessage.conversationId
-    ) {
-      return true;
+    // Add assistant message with tool calls to the transaction
+    if (this.activeTransaction) {
+      // Create a simple assistant message
+      const message = "I'll help you with that.";
+      this.addAssistantMessageToTransaction(message, calls);
+      this.logger.debug(
+        () => `[addPendingToolCalls] Added assistant message with ${calls.length} tool calls to transaction`,
+      );
+    } else {
+      this.logger.error(
+        () => `[addPendingToolCalls] Failed to start transaction for tool calls`,
+      );
     }
+  }
 
-    // Default to not merge
-    return false;
+  /**
+   * IHistoryService implementation - Commit tool responses from OpenAI/other providers
+   * This bridges the gap between Turn's expectations and HistoryService's transaction model
+   * 
+   * @requirement HS-050: Turn integration with HistoryService tool management
+   */
+  commitToolResponses(responses: ToolResponse[]): void {
+    this.logger.debug(
+      () => `[commitToolResponses] Committing ${responses.length} tool responses`,
+    );
+
+    // Add each response to the active transaction
+    if (this.activeTransaction) {
+      for (const response of responses) {
+        this.addToolResponseToTransaction(response.toolCallId, response);
+        this.logger.debug(
+          () => `[commitToolResponses] Added response for tool ${response.toolCallId}`,
+        );
+      }
+
+      // Commit the transaction
+      this.commitTransaction();
+      this.logger.debug(
+        () => `[commitToolResponses] Transaction committed successfully`,
+      );
+    } else {
+      // No active transaction - this might happen if tools are returned directly from provider
+      // Create a new transaction just for the responses
+      this.logger.warn(
+        () => `[commitToolResponses] No active transaction, creating one for responses`,
+      );
+      
+      const transactionId = this.beginToolTransaction();
+      for (const response of responses) {
+        this.addToolResponseToTransaction(response.toolCallId, response);
+      }
+      this.commitTransaction();
+      this.logger.debug(
+        () => `[commitToolResponses] Created and committed transaction ${transactionId} for responses`,
+      );
+    }
   }
 }

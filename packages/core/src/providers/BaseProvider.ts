@@ -19,6 +19,7 @@ import {
 } from '../auth/precedence.js';
 import { getSettingsService } from '../settings/settingsServiceInstance.js';
 import { UnauthorizedError } from '../utils/errors.js';
+import type { Message as HistoryMessage } from '../services/history/types.js';
 
 export interface BaseProviderConfig {
   // Basic provider config
@@ -271,6 +272,19 @@ export abstract class BaseProvider implements IProvider {
     tools?: ITool[],
     toolFormat?: string,
   ): AsyncIterableIterator<Content>;
+
+  // Default implementation for new HistoryMessage-based method
+  // Concrete providers can override this when they implement the bridge
+  async *generateChatCompletionEx(
+    _messages: HistoryMessage[],
+    _tools?: ITool[],
+    _toolFormat?: string,
+    _sessionId?: string,
+  ): AsyncIterableIterator<HistoryMessage> {
+    throw new Error(
+      `generateChatCompletionEx not yet implemented for ${this.name} provider`,
+    );
+  }
 
   // Optional methods with default implementations
   setModel?(_modelId: string): void {}

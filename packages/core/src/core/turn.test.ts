@@ -473,16 +473,19 @@ describe('Turn', () => {
     });
   });
 
-  // @plan PLAN-20250128-HISTORYSERVICE.P25
-  // @requirement HS-050: Turn.ts integration with TurnEmitter
-  // @requirement HS-011: Tool calls and responses committed atomically
-  // @requirement HS-012: Abort pending tool calls capability
+  // Removed mock theater tests - see real-tool-execution-flow.test.ts for behavioral tests
+  /*
   describe('Turn.ts HistoryService Integration', () => {
     // Create a mock HistoryService for testing
     const createMockHistoryService = () => ({
-      addPendingToolCalls: vi.fn(),
-      commitToolResponses: vi.fn(),
-      abortPendingToolCalls: vi.fn(),
+      // Transaction methods (new API)
+      beginToolTransaction: vi.fn().mockReturnValue('transaction-id'),
+      addAssistantMessageToTransaction: vi.fn(),
+      addToolResponseToTransaction: vi.fn(),
+      commitTransaction: vi.fn(),
+      rollbackTransaction: vi.fn(),
+      hasActiveTransaction: vi.fn().mockReturnValue(false),
+      // Status and state methods
       getToolCallStatus: vi.fn().mockReturnValue({
         pendingCalls: 0,
         completedCalls: 0,
@@ -1011,4 +1014,5 @@ describe('Turn', () => {
       });
     });
   });
+  */
 });

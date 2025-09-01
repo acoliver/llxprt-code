@@ -16,6 +16,7 @@ import {
   ConversationResponseEvent,
 } from '../telemetry/types.js';
 import { getConversationFileWriter } from '../storage/ConversationFileWriter.js';
+import type { Message as HistoryMessage } from '../services/history/types.js';
 
 export interface ConversationDataRedactor {
   redactContent(content: Content, provider: string): Content;
@@ -451,6 +452,23 @@ export class LoggingProviderWrapper implements IProvider {
     } catch (logError) {
       console.warn('Failed to log tool call:', logError);
     }
+  }
+
+  // New HistoryMessage-based method - passthrough to wrapped provider
+  async *generateChatCompletionEx(
+    messages: HistoryMessage[],
+    tools?: ITool[],
+    toolFormat?: string,
+    sessionId?: string,
+  ): AsyncIterableIterator<HistoryMessage> {
+    // For now, just passthrough without logging
+    // TODO: Add logging support for HistoryMessage format
+    yield* this.wrapped.generateChatCompletionEx(
+      messages,
+      tools,
+      toolFormat,
+      sessionId,
+    );
   }
 
   // All other methods are simple passthroughs to wrapped provider

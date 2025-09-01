@@ -54,6 +54,10 @@ class MockOpenAIProvider implements IProvider {
     } as Content & { metadata: { responseId: string } };
   }
 
+  async *generateChatCompletionEx() {
+    throw new Error('generateChatCompletionEx not implemented in mock');
+  }
+
   async getModels() {
     return [
       {

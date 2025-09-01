@@ -26,7 +26,6 @@
 import { DebugLogger } from '../../debug/index.js';
 import { IModel } from '../IModel.js';
 import { ITool } from '../ITool.js';
-import { ContentGeneratorRole } from '../ContentGeneratorRole.js';
 import { GemmaToolCallParser } from '../../parsers/TextToolCallParser.js';
 import { retryWithBackoff } from '../../utils/retry.js';
 import { ToolFormatter } from '../../tools/ToolFormatter.js';
@@ -51,6 +50,8 @@ import { OAuthManager } from '../../auth/precedence.js';
 import { getSettingsService } from '../../settings/settingsServiceInstance.js';
 import { Content } from '@google/genai';
 import { OpenAIContentConverter } from '../converters/OpenAIContentConverter.js';
+import type { Message } from '../../services/history/types.js';
+import { OpenAIHistoryAdapter } from './OpenAIHistoryAdapter.js';
 
 /**
  * Usage metadata that can be attached to Content objects
@@ -813,11 +814,35 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   /**
-   * Helper method to convert OpenAI message format to Content and yield
-   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   * Helper method to convert Message back to Content for legacy method
    */
-  private yieldAsContent(message: OpenAIMessage): Content {
-    return this.converter.fromProviderFormat(message);
+  private messageToContent(message: Message): Content {
+    const content: Content = {
+      role: message.role as 'assistant' | 'user' | 'system',
+      parts: [{ text: message.content }],
+    };
+
+    // Add tool calls if present
+    if (message.toolCalls && message.toolCalls.length > 0) {
+      (content as any).tool_calls = message.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: 'function',
+        function: {
+          name: tc.name,
+          arguments:
+            typeof tc.arguments === 'string'
+              ? tc.arguments
+              : JSON.stringify(tc.arguments),
+        },
+      }));
+    }
+
+    // Add usage if present in metadata
+    if (message.metadata?.usage) {
+      (content as any).usage = message.metadata.usage;
+    }
+
+    return content;
   }
 
   /**
@@ -843,41 +868,30 @@ export class OpenAIProvider extends BaseProvider {
     return null;
   }
 
-  /**
-   * @plan PLAN-20250113-SIMPLIFICATION.P07
-   * @requirement REQ-003.1
-   * @pseudocode lines 140-163
-   */
-  /**
-   * @plan PLAN-20250826-RESPONSES.P05
-   * @requirement REQ-001
-   */
-  // @plan PLAN-20250128-HISTORYSERVICE.P29
-  // @requirement HS-041
-  // @phase provider-updates-impl
-  // @cleanup Remove tool response generation
-  async *generateChatCompletion(
-    contents: Content[],
+  override async *generateChatCompletionEx(
+    messages: Message[],
     tools?: ITool[],
     _toolFormat?: string,
     _sessionId?: string,
-  ): AsyncIterableIterator<Content> {
-    // If we have a temporary system instruction, prepend it as a system Content
-    let contentsToProcess = contents;
+  ): AsyncIterableIterator<Message> {
+    // Create adapter for format conversion
+    const adapter = new OpenAIHistoryAdapter();
+
+    // Convert Message[] to OpenAI format
+    let openAIMessages = adapter.toOpenAIFormat(messages);
+
+    // If we have a temporary system instruction, prepend it
     if (this.temporarySystemInstruction) {
-      const systemContent: Content = {
-        role: 'system',
-        parts: [{ text: this.temporarySystemInstruction }],
-      };
-      contentsToProcess = [systemContent, ...contents];
+      openAIMessages = [
+        {
+          role: 'system',
+          content: this.temporarySystemInstruction,
+        },
+        ...openAIMessages,
+      ];
       // Clear the temporary instruction after use
       this.temporarySystemInstruction = undefined;
     }
-
-    // For non-responses API path, convert Content[] to OpenAI format
-    const messages = this.converter.toProviderFormat(
-      contentsToProcess,
-    ) as OpenAIMessage[];
 
     // Check if API key is available (using resolved authentication)
     const apiKey = await this.getAuthToken();
@@ -889,51 +903,13 @@ export class OpenAIProvider extends BaseProvider {
       throw new Error('OpenAI API key is required to generate completions');
     }
 
-    // Line 12: IF this.shouldUseResponses(model) THEN
+    // TODO: Responses API support will be added later
+    /*
     if (this.shouldUseResponses(this.currentModel)) {
-      // Line 13: previousResponseId = CALL findPreviousResponseId(contents)
-      const previousResponseId = this.findPreviousResponseId(contentsToProcess);
-
-      // Line 14: conversationId = sessionId OR generateTempId()
-      const conversationId =
-        _sessionId ||
-        `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-      // Line 15-17: Build and call responses endpoint
-      // Stream responses directly as Content (no conversion needed)
-      for await (const content of await this.callResponsesEndpoint(
-        contentsToProcess,
-        tools,
-        {
-          stream: true,
-          tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
-          store: true, // Default to storing conversation state - that's the point of Responses API
-          conversationId,
-          parentId: previousResponseId || undefined,
-        },
-      )) {
-        // Content is already in the correct format from parseResponsesStream
-        yield content;
-      }
+      // Responses API integration to be implemented
       return;
     }
-
-    // Use messages as-is - no special response handling
-    const patchedMessages = messages;
-
-    // Validate tool messages have required tool_call_id
-    const toolMessages = patchedMessages.filter((msg) => msg.role === 'tool');
-    const missingIds = toolMessages.filter((msg) => !msg.tool_call_id);
-
-    if (missingIds.length > 0) {
-      this.logger.error(
-        () =>
-          `FATAL: Tool messages missing tool_call_id: ${JSON.stringify(missingIds)}`,
-      );
-      throw new Error(
-        `OpenAI API requires tool_call_id for all tool messages. Found ${missingIds.length} tool message(s) without IDs.`,
-      );
-    }
+    */
 
     const parser = this.requiresTextToolCallParsing()
       ? new GemmaToolCallParser()
@@ -962,7 +938,7 @@ export class OpenAIProvider extends BaseProvider {
     await this.updateClientWithResolvedAuth();
 
     // Use messages as-is - no internal fields to strip
-    const cleanedMessages = patchedMessages;
+    const cleanedMessages = openAIMessages;
 
     this.logger.debug(
       () =>
@@ -980,10 +956,21 @@ export class OpenAIProvider extends BaseProvider {
           .join(', ')}`,
     );
 
+    // Bridge logging: Basic request details
+    this.logger.debug(() => '=== HISTORY BRIDGE REQUEST ===');
+    this.logger.debug(() => `Model: ${this.currentModel}`);
+    this.logger.debug(() => `Message count: ${cleanedMessages.length}`);
+    this.logger.debug(
+      () =>
+        `Tool count: ${Array.isArray(formattedTools) ? formattedTools.length : formattedTools ? 1 : 0}`,
+    );
+    this.logger.debug(() => '=== END BRIDGE REQUEST ===');
+
     let response;
     try {
-      // Build request params with exact order from original
-      response = await this.openai.chat.completions.create({
+      // Log the exact request being sent
+      this.logger.debug(() => '--- SENDING REQUEST TO OPENAI API ---');
+      const requestParams = {
         model: this.currentModel,
         messages:
           cleanedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
@@ -996,7 +983,29 @@ export class OpenAIProvider extends BaseProvider {
           | undefined,
         tool_choice: this.getToolChoiceForFormat(tools),
         ...this.modelParams,
-      });
+      };
+
+      this.logger.debug(
+        () =>
+          `Request params: ${JSON.stringify({
+            model: requestParams.model,
+            messageCount: requestParams.messages.length,
+            stream: requestParams.stream,
+            toolCount: requestParams.tools?.length || 0,
+            tool_choice: requestParams.tool_choice,
+            modelParams: this.modelParams,
+          })}`,
+      );
+
+      // Build request params with exact order from original
+      response = await this.openai.chat.completions.create(requestParams);
+
+      this.logger.debug(
+        () =>
+          '--- RECEIVED RESPONSE FROM OPENAI API (streaming=' +
+          streamingEnabled +
+          ') ---',
+      );
     } catch (error) {
       // Debug the error
       const errorStatus =
@@ -1025,61 +1034,22 @@ export class OpenAIProvider extends BaseProvider {
           () => '=== OPENAI ERROR 400 - FULL CONVERSATION DUMP ===',
         );
         this.logger.debug(
-          () => `Total messages in conversation: ${contents.length}`,
+          () => `Total messages in conversation: ${cleanedMessages.length}`,
         );
 
-        // First log the original Content[] format
-        this.logger.debug(() => '--- Original Content[] Format ---');
-        contents.forEach((content, idx) => {
-          this.logger.debug(
-            () =>
-              `Message[${idx}]: role=${content.role}, parts=${content.parts?.length || 0}`,
-          );
-
-          content.parts?.forEach((part, partIdx) => {
-            if ('text' in part && part.text) {
-              const textLength = part.text.length;
-              const preview =
-                textLength > 100
-                  ? part.text.substring(0, 100) + '...'
-                  : part.text;
-              this.logger.debug(
-                () =>
-                  `  Part[${partIdx}]: text (${textLength} chars): "${preview}"`,
-              );
-            }
-            if ('functionCall' in part && part.functionCall) {
-              const funcCall = part.functionCall;
-              this.logger.debug(
-                () =>
-                  `  Part[${partIdx}]: functionCall\n` +
-                  `    id: ${funcCall.id}\n` +
-                  `    name: ${funcCall.name}\n` +
-                  `    args: ${JSON.stringify(funcCall.args).substring(0, 100)}...`,
-              );
-            }
-            if ('functionResponse' in part && part.functionResponse) {
-              const funcResponse = part.functionResponse;
-              const responseId = (funcResponse as { id?: string }).id;
-              this.logger.debug(
-                () =>
-                  `  Part[${partIdx}]: functionResponse\n` +
-                  `    id: ${responseId}\n` +
-                  `    name: ${funcResponse.name}\n` +
-                  `    response: ${JSON.stringify(funcResponse.response).substring(0, 100)}...`,
-              );
-            }
-          });
-        });
-
-        // Now log the converted OpenAI format
+        // Log the OpenAI format messages
         this.logger.debug(() => '--- Converted OpenAI Format ---');
         cleanedMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
           this.logger.debug(
             () =>
               `Message[${idx}]: role=${msg.role}` +
-              (msg.tool_call_id ? ` tool_call_id=${msg.tool_call_id}` : '') +
-              (msg.tool_calls ? ` tool_calls=${msg.tool_calls.length}` : ''),
+              (msgAny.tool_call_id
+                ? ` tool_call_id=${msgAny.tool_call_id}`
+                : '') +
+              (msgAny.tool_calls
+                ? ` tool_calls=${msgAny.tool_calls.length}`
+                : ''),
           );
 
           if (msg.content) {
@@ -1090,8 +1060,8 @@ export class OpenAIProvider extends BaseProvider {
             this.logger.debug(() => `  content: ${preview}`);
           }
 
-          if (msg.tool_calls) {
-            msg.tool_calls.forEach((tc, tcIdx) => {
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any, tcIdx: number) => {
               this.logger.debug(
                 () =>
                   `  tool_call[${tcIdx}]: id=${tc.id}, name=${tc.function.name}`,
@@ -1108,19 +1078,20 @@ export class OpenAIProvider extends BaseProvider {
         >();
 
         cleanedMessages.forEach((msg, idx) => {
-          if (msg.role === 'assistant' && msg.tool_calls) {
-            msg.tool_calls.forEach((tc) => {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
               toolCallMap.set(tc.id, { callIdx: idx, responseIdx: null });
             });
           }
-          if (msg.role === 'tool' && msg.tool_call_id) {
-            const entry = toolCallMap.get(msg.tool_call_id);
+          if (msg.role === 'tool' && msgAny.tool_call_id) {
+            const entry = toolCallMap.get(msgAny.tool_call_id);
             if (entry) {
               entry.responseIdx = idx;
             } else {
               this.logger.debug(
                 () =>
-                  `  WARNING: Tool response ${msg.tool_call_id} has no corresponding call!`,
+                  `  WARNING: Tool response ${msgAny.tool_call_id} has no corresponding call!`,
               );
             }
           }
@@ -1143,13 +1114,15 @@ export class OpenAIProvider extends BaseProvider {
 
         // Log additional diagnostics for 400 errors
         const hasPendingToolCalls = cleanedMessages.some((msg, idx) => {
-          if (msg.role === 'assistant' && msg.tool_calls) {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
             // Check if there's a matching tool response
-            const toolCallIds = msg.tool_calls.map((tc) => tc.id);
-            const hasResponses = toolCallIds.every((id) =>
-              cleanedMessages
-                .slice(idx + 1)
-                .some((m) => m.role === 'tool' && m.tool_call_id === id),
+            const toolCallIds = msgAny.tool_calls.map((tc: any) => tc.id);
+            const hasResponses = toolCallIds.every((id: string) =>
+              cleanedMessages.slice(idx + 1).some((m) => {
+                const mAny = m as any;
+                return m.role === 'tool' && mAny.tool_call_id === id;
+              }),
             );
             return !hasResponses;
           }
@@ -1163,12 +1136,13 @@ export class OpenAIProvider extends BaseProvider {
         );
         const lastMessages = cleanedMessages.slice(-5);
         lastMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
           this.logger.error(
             () =>
-              `  [${cleanedMessages.length - 5 + idx}] ${msg.role}${msg.tool_call_id ? ` (tool response for ${msg.tool_call_id})` : ''}${msg.tool_calls ? ` (${msg.tool_calls.length} tool calls)` : ''}`,
+              `  [${cleanedMessages.length - 5 + idx}] ${msg.role}${msgAny.tool_call_id ? ` (tool response for ${msgAny.tool_call_id})` : ''}${msgAny.tool_calls ? ` (${msgAny.tool_calls.length} tool calls)` : ''}`,
           );
-          if (msg.tool_calls) {
-            msg.tool_calls.forEach((tc) => {
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
               this.logger.error(
                 () => `    - Tool call: ${tc.id} -> ${tc.function.name}`,
               );
@@ -1207,15 +1181,39 @@ export class OpenAIProvider extends BaseProvider {
     // Handle streaming vs non-streaming response
     if (streamingEnabled) {
       // Process streaming response directly
+      let chunkCount = 0;
       for await (const chunk of response as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>) {
+        chunkCount++;
         const delta = chunk.choices?.[0]?.delta;
+
+        // Log first few chunks and important chunks
+        if (chunkCount <= 5 || delta?.tool_calls) {
+          this.logger.debug(() => `--- STREAMING CHUNK ${chunkCount} ---`);
+          this.logger.debug(
+            () =>
+              `Delta: ${JSON.stringify({
+                role: delta?.role,
+                content: delta?.content?.substring(0, 100),
+                tool_calls: delta?.tool_calls?.map((tc) => ({
+                  index: tc.index,
+                  id: tc.id,
+                  function: tc.function
+                    ? {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments?.substring(0, 50),
+                      }
+                    : undefined,
+                })),
+              })}`,
+          );
+        }
 
         if (delta?.content) {
           // Enhanced debug logging to understand streaming behavior
-          if (this.isUsingQwen()) {
+          if (this.isUsingQwen() && chunkCount <= 10) {
             this.logger.debug(
               () =>
-                `Chunk: ${JSON.stringify({
+                `Qwen Chunk ${chunkCount}: ${JSON.stringify({
                   content: delta.content,
                   contentLength: delta.content?.length ?? 0,
                   isWhitespaceOnly: delta.content?.trim() === '',
@@ -1254,10 +1252,14 @@ export class OpenAIProvider extends BaseProvider {
                   () =>
                     `Flushing pending whitespace (len=${pendingWhitespace?.length ?? 0}) before non-empty chunk`,
                 );
-                yield this.yieldAsContent({
-                  role: ContentGeneratorRole.ASSISTANT,
+                yield {
+                  id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                  role: 'assistant',
                   content: pendingWhitespace,
-                });
+                  timestamp: Date.now(),
+                  conversationId: '',
+                  metadata: {},
+                } as Message;
                 hasStreamedContent = true;
                 fullContent += pendingWhitespace;
                 pendingWhitespace = null;
@@ -1269,10 +1271,14 @@ export class OpenAIProvider extends BaseProvider {
               hasStreamedContent,
             });
 
-            yield this.yieldAsContent({
-              role: ContentGeneratorRole.ASSISTANT,
+            yield {
+              id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              role: 'assistant',
               content: delta.content,
-            });
+              timestamp: Date.now(),
+              conversationId: '',
+              metadata: {},
+            } as Message;
             hasStreamedContent = true;
           }
 
@@ -1330,12 +1336,19 @@ export class OpenAIProvider extends BaseProvider {
         };
       }
 
-      // For non-streaming, we yield the full content at once if there's no parser
-      if (!parser && fullContent) {
-        yield this.yieldAsContent({
-          role: ContentGeneratorRole.ASSISTANT,
-          content: fullContent,
-        });
+      // For non-streaming, use adapter to create complete message
+      // Only yield content-only message if there are no tool calls
+      if (!parser && fullContent && accumulatedToolCalls.length === 0) {
+        const syntheticResponse = {
+          choices: [
+            {
+              message: { content: fullContent, tool_calls: null },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: usageData,
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
         hasStreamedContent = true;
       }
     }
@@ -1346,10 +1359,14 @@ export class OpenAIProvider extends BaseProvider {
         () =>
           `Flushing trailing pending whitespace (len=${pendingWhitespace?.length ?? 0}) at stream end`,
       );
-      yield this.yieldAsContent({
-        role: ContentGeneratorRole.ASSISTANT,
+      yield {
+        id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        role: 'assistant',
         content: pendingWhitespace,
-      });
+        timestamp: Date.now(),
+        conversationId: '',
+        metadata: {},
+      } as Message;
       hasStreamedContent = true;
       fullContent += pendingWhitespace;
       pendingWhitespace = null;
@@ -1372,19 +1389,31 @@ export class OpenAIProvider extends BaseProvider {
           },
         }));
 
-        yield this.yieldAsContent({
-          role: ContentGeneratorRole.ASSISTANT,
-          content: cleanedContent,
-          tool_calls: standardToolCalls,
+        const syntheticResponse = {
+          choices: [
+            {
+              message: {
+                content: cleanedContent,
+                tool_calls: standardToolCalls,
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
           usage: usageData,
-        });
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
       } else {
         // No tool calls found, yield cleaned content
-        yield this.yieldAsContent({
-          role: ContentGeneratorRole.ASSISTANT,
-          content: cleanedContent,
+        const syntheticResponse = {
+          choices: [
+            {
+              message: { content: cleanedContent, tool_calls: null },
+              finish_reason: 'stop',
+            },
+          ],
           usage: usageData,
-        });
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
       }
     } else {
       // Standard OpenAI tool call handling
@@ -1561,28 +1590,971 @@ export class OpenAIProvider extends BaseProvider {
 
         if (shouldOmitContent) {
           // Qwen: Send just a space to prevent stream stopping
-          yield this.yieldAsContent({
-            role: ContentGeneratorRole.ASSISTANT,
-            content: ' ', // Single space instead of empty to keep stream alive
-            tool_calls: fixedToolCalls,
+          const syntheticResponse = {
+            choices: [
+              {
+                message: {
+                  content: ' ', // Single space instead of empty to keep stream alive
+                  tool_calls: fixedToolCalls,
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
             usage: usageData,
-          });
+          };
+          yield adapter.fromOpenAIComplete(syntheticResponse);
         } else {
           // Include full content with tool calls
-          yield this.yieldAsContent({
-            role: ContentGeneratorRole.ASSISTANT,
-            content: fullContent || '',
-            tool_calls: fixedToolCalls,
+          const syntheticResponse = {
+            choices: [
+              {
+                message: {
+                  content: fullContent || '',
+                  tool_calls: fixedToolCalls,
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
             usage: usageData,
-          });
+          };
+          yield adapter.fromOpenAIComplete(syntheticResponse);
         }
       } else if (usageData) {
         // Always emit usage data so downstream consumers can update stats
-        yield this.yieldAsContent({
-          role: ContentGeneratorRole.ASSISTANT,
-          content: '',
+        const syntheticResponse = {
+          choices: [
+            {
+              message: { content: '', tool_calls: null },
+              finish_reason: 'stop',
+            },
+          ],
           usage: usageData,
+        };
+        yield adapter.fromOpenAIComplete(syntheticResponse);
+      }
+    }
+  }
+
+  /**
+   * @plan PLAN-20250113-SIMPLIFICATION.P07
+   * @requirement REQ-003.1
+   * @pseudocode lines 140-163
+   */
+  /**
+   * @plan PLAN-20250826-RESPONSES.P05
+   * @requirement REQ-001
+   */
+  // @plan PLAN-20250128-HISTORYSERVICE.P29
+  // @requirement HS-041
+  // @phase provider-updates-impl
+  // @cleanup Remove tool response generation
+  async *generateChatCompletion(
+    contents: Content[],
+    tools?: ITool[],
+    _toolFormat?: string,
+    _sessionId?: string,
+  ): AsyncIterableIterator<Content> {
+    // Create adapter for format conversion (results will be converted back to Content)
+    const adapter = new OpenAIHistoryAdapter();
+
+    // If we have a temporary system instruction, prepend it as a system Content
+    let contentsToProcess = contents;
+    if (this.temporarySystemInstruction) {
+      const systemContent: Content = {
+        role: 'system',
+        parts: [{ text: this.temporarySystemInstruction }],
+      };
+      contentsToProcess = [systemContent, ...contents];
+      // Clear the temporary instruction after use
+      this.temporarySystemInstruction = undefined;
+    }
+
+    // For non-responses API path, convert Content[] to OpenAI format
+    const messages = this.converter.toProviderFormat(
+      contentsToProcess,
+    ) as OpenAIMessage[];
+
+    // Check if API key is available (using resolved authentication)
+    const apiKey = await this.getAuthToken();
+    if (!apiKey) {
+      const endpoint = this.baseURL || 'https://api.openai.com/v1';
+      if (this.isOAuthEnabled() && !this.supportsOAuth()) {
+        throw new Error(generateOAuthEndpointMismatchError(endpoint, 'qwen'));
+      }
+      throw new Error('OpenAI API key is required to generate completions');
+    }
+
+    // Line 12: IF this.shouldUseResponses(model) THEN
+    if (this.shouldUseResponses(this.currentModel)) {
+      // Line 13: previousResponseId = CALL findPreviousResponseId(contents)
+      const previousResponseId = this.findPreviousResponseId(contentsToProcess);
+
+      // Line 14: conversationId = sessionId OR generateTempId()
+      const conversationId =
+        _sessionId ||
+        `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Line 15-17: Build and call responses endpoint
+      // Stream responses directly as Content (no conversion needed)
+      for await (const content of await this.callResponsesEndpoint(
+        contentsToProcess,
+        tools,
+        {
+          stream: true,
+          tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
+          store: true, // Default to storing conversation state - that's the point of Responses API
+          conversationId,
+          parentId: previousResponseId || undefined,
+        },
+      )) {
+        // Content is already in the correct format from parseResponsesStream
+        yield content;
+      }
+      return;
+    }
+
+    // Use messages as-is - no special response handling
+    const patchedMessages = messages;
+
+    // Validate tool messages have required tool_call_id
+    const toolMessages = patchedMessages.filter((msg) => msg.role === 'tool');
+    const missingIds = toolMessages.filter((msg) => !msg.tool_call_id);
+
+    if (missingIds.length > 0) {
+      this.logger.error(
+        () =>
+          `FATAL: Tool messages missing tool_call_id: ${JSON.stringify(missingIds)}`,
+      );
+      throw new Error(
+        `OpenAI API requires tool_call_id for all tool messages. Found ${missingIds.length} tool message(s) without IDs.`,
+      );
+    }
+
+    const parser = this.requiresTextToolCallParsing()
+      ? new GemmaToolCallParser()
+      : null;
+
+    // Get current tool format (with override support)
+    const currentToolFormat = this.getToolFormat();
+
+    // Format tools using formatToolsForAPI method
+    const formattedTools = tools ? this.formatToolsForAPI(tools) : undefined;
+
+    // Get stream_options from ephemeral settings (not model params)
+    const streamOptions =
+      this.providerConfig?.getEphemeralSettings?.()?.['stream-options'];
+
+    // Default stream_options to { include_usage: true } unless explicitly set
+    const finalStreamOptions =
+      streamOptions !== undefined ? streamOptions : { include_usage: true };
+
+    // Get streaming setting from ephemeral settings (default: enabled)
+    const streamingSetting =
+      this.providerConfig?.getEphemeralSettings?.()?.['streaming'];
+    const streamingEnabled = streamingSetting !== 'disabled';
+
+    // Get resolved authentication and update client if needed
+    await this.updateClientWithResolvedAuth();
+
+    // Use messages as-is - no internal fields to strip
+    const cleanedMessages = patchedMessages;
+
+    this.logger.debug(
+      () =>
+        `About to make API call with model: ${this.currentModel}, baseURL: ${this.openai.baseURL}, apiKey: ${this.openai.apiKey?.substring(0, 10)}..., streaming: ${streamingEnabled}`,
+    );
+
+    // Debug: Log message roles being sent
+    this.logger.debug(
+      () =>
+        `Messages being sent to OpenAI (${cleanedMessages.length} total): ${cleanedMessages
+          .map(
+            (m) =>
+              `${m.role}${m.role === 'system' ? ` (length: ${m.content?.length})` : ''}`,
+          )
+          .join(', ')}`,
+    );
+
+    // DETAILED DEBUG: Log full messages for debugging 400 errors
+    this.logger.debug(() => '=== OPENAI API REQUEST DETAILS ===');
+    this.logger.debug(() => `Model: ${this.currentModel}`);
+    this.logger.debug(() => `Provider: ${this.baseURL || 'OpenAI'}`);
+    this.logger.debug(() => `Turn number: ${contents.length}`);
+
+    // Log the raw Content[] format before conversion
+    this.logger.debug(() => '--- RAW Content[] FORMAT (before conversion) ---');
+    contents.forEach((content, idx) => {
+      this.logger.debug(() => `Content[${idx}] role=${content.role}`);
+      if (content.parts) {
+        content.parts.forEach((part, partIdx) => {
+          if ('text' in part && part.text) {
+            this.logger.debug(
+              () =>
+                `  Part[${partIdx}]: text="${part.text?.substring(0, 100) || ''}..."`,
+            );
+          }
+          if ('functionCall' in part && part.functionCall) {
+            const fc = part.functionCall as any;
+            this.logger.debug(
+              () =>
+                `  Part[${partIdx}]: functionCall id=${fc.id}, name=${fc.name}`,
+            );
+          }
+          if ('functionResponse' in part && part.functionResponse) {
+            const fr = part.functionResponse as any;
+            this.logger.debug(
+              () =>
+                `  Part[${partIdx}]: functionResponse id=${fr.id}, name=${fr.name}`,
+            );
+          }
         });
+      }
+    });
+
+    // Log each converted message in detail
+    this.logger.debug(
+      () => '--- CONVERTED OpenAI FORMAT (after conversion) ---',
+    );
+    cleanedMessages.forEach((msg, idx) => {
+      this.logger.debug(
+        () => `--- Message ${idx + 1} of ${cleanedMessages.length} ---`,
+      );
+      this.logger.debug(() => `Role: ${msg.role}`);
+
+      if (msg.content) {
+        this.logger.debug(
+          () => `Content: ${JSON.stringify(msg.content).substring(0, 500)}`,
+        );
+      }
+
+      if (msg.tool_calls) {
+        this.logger.debug(() => `Tool Calls: ${msg.tool_calls?.length || 0}`);
+        msg.tool_calls?.forEach((tc, tcIdx) => {
+          this.logger.debug(
+            () =>
+              `  Tool Call ${tcIdx + 1}: id=${tc.id}, name=${tc.function.name}`,
+          );
+          this.logger.debug(
+            () => `    Args: ${tc.function.arguments.substring(0, 200)}`,
+          );
+        });
+      }
+
+      if (msg.tool_call_id) {
+        this.logger.debug(() => `Tool Response ID: ${msg.tool_call_id}`);
+        this.logger.debug(
+          () =>
+            `Tool Response Content: ${JSON.stringify(msg.content).substring(0, 500)}`,
+        );
+      }
+    });
+
+    // Log if there are any duplicate tool call IDs
+    const toolCallIds = new Set<string>();
+    const duplicateIds = new Set<string>();
+
+    cleanedMessages.forEach((msg) => {
+      if (msg.tool_calls) {
+        msg.tool_calls.forEach((tc) => {
+          if (toolCallIds.has(tc.id)) {
+            duplicateIds.add(tc.id);
+          }
+          toolCallIds.add(tc.id);
+        });
+      }
+    });
+
+    if (duplicateIds.size > 0) {
+      this.logger.error(
+        () =>
+          `!!! DUPLICATE TOOL CALL IDS DETECTED: ${Array.from(duplicateIds).join(', ')}`,
+      );
+    }
+
+    // Check for orphaned tool responses
+    const toolResponseIds = new Set<string>();
+    cleanedMessages.forEach((msg) => {
+      if (msg.tool_call_id) {
+        toolResponseIds.add(msg.tool_call_id);
+      }
+    });
+
+    const orphanedResponses = Array.from(toolResponseIds).filter(
+      (id) => !toolCallIds.has(id),
+    );
+    if (orphanedResponses.length > 0) {
+      this.logger.error(
+        () =>
+          `!!! ORPHANED TOOL RESPONSES DETECTED (no matching call): ${orphanedResponses.join(', ')}`,
+      );
+    }
+
+    this.logger.debug(() => '=== END REQUEST DETAILS ===');
+
+    let response;
+    try {
+      // Log the exact request being sent
+      this.logger.debug(() => '--- SENDING REQUEST TO OPENAI API ---');
+      const requestParams = {
+        model: this.currentModel,
+        messages:
+          cleanedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+        stream: streamingEnabled,
+        ...(streamingEnabled && finalStreamOptions
+          ? { stream_options: finalStreamOptions }
+          : {}),
+        tools: formattedTools as
+          | OpenAI.Chat.Completions.ChatCompletionTool[]
+          | undefined,
+        tool_choice: this.getToolChoiceForFormat(tools),
+        ...this.modelParams,
+      };
+
+      this.logger.debug(
+        () =>
+          `Request params: ${JSON.stringify({
+            model: requestParams.model,
+            messageCount: requestParams.messages.length,
+            stream: requestParams.stream,
+            toolCount: requestParams.tools?.length || 0,
+            tool_choice: requestParams.tool_choice,
+            modelParams: this.modelParams,
+          })}`,
+      );
+
+      // Build request params with exact order from original
+      response = await this.openai.chat.completions.create(requestParams);
+
+      this.logger.debug(
+        () =>
+          '--- RECEIVED RESPONSE FROM OPENAI API (streaming=' +
+          streamingEnabled +
+          ') ---',
+      );
+    } catch (error) {
+      // Debug the error
+      const errorStatus =
+        (error as { status?: number })?.status ||
+        (error as { response?: { status?: number } })?.response?.status;
+      const errorLabel =
+        errorStatus === 400 ? '[API Error 400]' : '[API Error]';
+
+      this.logger.error(
+        () => `${errorLabel} Error caught in API call: ${error}`,
+      );
+      this.logger.error(
+        () =>
+          `${errorLabel} Error type: ${(error as Error)?.constructor?.name}`,
+      );
+      this.logger.error(() => `${errorLabel} Error status: ${errorStatus}`);
+      this.logger.error(
+        () =>
+          `${errorLabel} Error response data: ${JSON.stringify((error as { response?: { data?: unknown } })?.response?.data, null, 2)}`,
+      );
+
+      // Log the last few messages to understand what's being sent
+      if (errorStatus === 400) {
+        // Dump full conversation history for debugging
+        this.logger.debug(
+          () => '=== OPENAI ERROR 400 - FULL CONVERSATION DUMP ===',
+        );
+        this.logger.debug(
+          () => `Total messages in conversation: ${cleanedMessages.length}`,
+        );
+
+        // Log the OpenAI format messages
+        this.logger.debug(() => '--- Converted OpenAI Format ---');
+        cleanedMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          this.logger.debug(
+            () =>
+              `Message[${idx}]: role=${msg.role}` +
+              (msgAny.tool_call_id
+                ? ` tool_call_id=${msgAny.tool_call_id}`
+                : '') +
+              (msgAny.tool_calls
+                ? ` tool_calls=${msgAny.tool_calls.length}`
+                : ''),
+          );
+
+          if (msg.content) {
+            const preview =
+              typeof msg.content === 'string' && msg.content.length > 100
+                ? msg.content.substring(0, 100) + '...'
+                : msg.content;
+            this.logger.debug(() => `  content: ${preview}`);
+          }
+
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any, tcIdx: number) => {
+              this.logger.debug(
+                () =>
+                  `  tool_call[${tcIdx}]: id=${tc.id}, name=${tc.function.name}`,
+              );
+            });
+          }
+        });
+
+        // Analysis of tool call/response pairing
+        this.logger.debug(() => '--- Tool Call/Response Analysis ---');
+        const toolCallMap = new Map<
+          string,
+          { callIdx: number; responseIdx: number | null }
+        >();
+
+        cleanedMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
+              toolCallMap.set(tc.id, { callIdx: idx, responseIdx: null });
+            });
+          }
+          if (msg.role === 'tool' && msgAny.tool_call_id) {
+            const entry = toolCallMap.get(msgAny.tool_call_id);
+            if (entry) {
+              entry.responseIdx = idx;
+            } else {
+              this.logger.debug(
+                () =>
+                  `  WARNING: Tool response ${msgAny.tool_call_id} has no corresponding call!`,
+              );
+            }
+          }
+        });
+
+        // Report unpaired tool calls
+        toolCallMap.forEach((entry, id) => {
+          if (entry.responseIdx === null) {
+            this.logger.debug(
+              () =>
+                `  ERROR: Tool call ${id} at index ${entry.callIdx} has no response!`,
+            );
+          } else {
+            this.logger.debug(
+              () =>
+                `  OK: Tool call ${id} at index ${entry.callIdx} has response at index ${entry.responseIdx}`,
+            );
+          }
+        });
+
+        // Log additional diagnostics for 400 errors
+        const hasPendingToolCalls = cleanedMessages.some((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          if (msg.role === 'assistant' && msgAny.tool_calls) {
+            // Check if there's a matching tool response
+            const toolCallIds = msgAny.tool_calls.map((tc: any) => tc.id);
+            const hasResponses = toolCallIds.every((id: string) =>
+              cleanedMessages.slice(idx + 1).some((m) => {
+                const mAny = m as any;
+                return m.role === 'tool' && mAny.tool_call_id === id;
+              }),
+            );
+            return !hasResponses;
+          }
+          return false;
+        });
+
+        this.logger.error(() => `${errorLabel} Last 5 messages being sent:`);
+        this.logger.error(
+          () =>
+            `${errorLabel} Has pending tool calls without responses: ${hasPendingToolCalls}`,
+        );
+        const lastMessages = cleanedMessages.slice(-5);
+        lastMessages.forEach((msg, idx) => {
+          const msgAny = msg as any; // Type cast for debugging
+          this.logger.error(
+            () =>
+              `  [${cleanedMessages.length - 5 + idx}] ${msg.role}${msgAny.tool_call_id ? ` (tool response for ${msgAny.tool_call_id})` : ''}${msgAny.tool_calls ? ` (${msgAny.tool_calls.length} tool calls)` : ''}`,
+          );
+          if (msgAny.tool_calls) {
+            msgAny.tool_calls.forEach((tc: any) => {
+              this.logger.error(
+                () => `    - Tool call: ${tc.id} -> ${tc.function.name}`,
+              );
+            });
+          }
+        });
+
+        this.logger.debug(() => '=== END OPENAI ERROR 400 DUMP ===');
+      }
+
+      // Re-throw the error
+      throw error;
+    }
+
+    let fullContent = '';
+    const accumulatedToolCalls: Array<{
+      id: string;
+      type: 'function';
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }> = [];
+    let hasStreamedContent = false;
+    let usageData:
+      | {
+          prompt_tokens: number;
+          completion_tokens: number;
+          total_tokens: number;
+        }
+      | undefined;
+
+    // For Qwen streaming, buffer whitespace-only chunks to preserve spacing across chunk boundaries
+    let pendingWhitespace: string | null = null;
+
+    // Handle streaming vs non-streaming response
+    if (streamingEnabled) {
+      // Process streaming response directly
+      let chunkCount = 0;
+      for await (const chunk of response as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>) {
+        chunkCount++;
+        const delta = chunk.choices?.[0]?.delta;
+
+        // Log first few chunks and important chunks
+        if (chunkCount <= 5 || delta?.tool_calls) {
+          this.logger.debug(() => `--- STREAMING CHUNK ${chunkCount} ---`);
+          this.logger.debug(
+            () =>
+              `Delta: ${JSON.stringify({
+                role: delta?.role,
+                content: delta?.content?.substring(0, 100),
+                tool_calls: delta?.tool_calls?.map((tc) => ({
+                  index: tc.index,
+                  id: tc.id,
+                  function: tc.function
+                    ? {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments?.substring(0, 50),
+                      }
+                    : undefined,
+                })),
+              })}`,
+          );
+        }
+
+        if (delta?.content) {
+          // Enhanced debug logging to understand streaming behavior
+          if (this.isUsingQwen() && chunkCount <= 10) {
+            this.logger.debug(
+              () =>
+                `Qwen Chunk ${chunkCount}: ${JSON.stringify({
+                  content: delta.content,
+                  contentLength: delta.content?.length ?? 0,
+                  isWhitespaceOnly: delta.content?.trim() === '',
+                })}`,
+            );
+          }
+
+          // For text-based models, don't yield content chunks yet
+          if (!parser && delta.content) {
+            this.logger.debug(
+              () => `[Content Processing] Processing chunk with content`,
+              {
+                contentLength: delta.content.length,
+                contentPreview: delta.content.substring(0, 50),
+                isUsingQwen: this.isUsingQwen(),
+                willBuffer: this.isUsingQwen() && delta.content.trim() === '',
+              },
+            );
+
+            if (this.isUsingQwen()) {
+              const isWhitespaceOnly = delta.content.trim() === '';
+              if (isWhitespaceOnly) {
+                // Buffer whitespace-only chunk
+                pendingWhitespace = (pendingWhitespace || '') + delta.content;
+                this.logger.debug(
+                  () =>
+                    `[Whitespace Buffering] Buffered whitespace-only chunk (len=${delta.content?.length ?? 0}). pendingWhitespace now len=${pendingWhitespace?.length ?? 0}`,
+                  {
+                    contentHex: Buffer.from(delta.content).toString('hex'),
+                  },
+                );
+                continue;
+              } else if (pendingWhitespace) {
+                // Flush buffered whitespace before non-empty chunk to preserve spacing
+                this.logger.debug(
+                  () =>
+                    `Flushing pending whitespace (len=${pendingWhitespace?.length ?? 0}) before non-empty chunk`,
+                );
+                yield {
+                  role: 'assistant',
+                  parts: [{ text: pendingWhitespace }],
+                };
+                hasStreamedContent = true;
+                fullContent += pendingWhitespace;
+                pendingWhitespace = null;
+              }
+            }
+
+            this.logger.debug(() => `[Yielding Content] Yielding chunk`, {
+              contentLength: delta.content.length,
+              hasStreamedContent,
+            });
+
+            yield {
+              role: 'assistant',
+              parts: [{ text: delta.content }],
+            };
+            hasStreamedContent = true;
+          }
+
+          fullContent += delta.content;
+        }
+
+        if (delta?.tool_calls) {
+          for (const toolCall of delta.tool_calls) {
+            this.toolFormatter.accumulateStreamingToolCall(
+              toolCall,
+              accumulatedToolCalls,
+              currentToolFormat,
+            );
+          }
+        }
+
+        // Check for usage data in the chunk
+        if (chunk.usage) {
+          usageData = {
+            prompt_tokens: chunk.usage.prompt_tokens || 0,
+            completion_tokens: chunk.usage.completion_tokens || 0,
+            total_tokens: chunk.usage.total_tokens || 0,
+          };
+        }
+      }
+    } else {
+      // Non-streaming response - handle as a single completion
+      const completionResponse =
+        response as OpenAI.Chat.Completions.ChatCompletion;
+      const choice = completionResponse.choices[0];
+
+      if (choice?.message.content) {
+        fullContent = choice.message.content;
+      }
+
+      if (choice?.message.tool_calls) {
+        // Convert tool calls to the standard format
+        for (const toolCall of choice.message.tool_calls) {
+          if (toolCall.type === 'function' && toolCall.function) {
+            // Don't fix double stringification here - it's handled later in the final processing
+            accumulatedToolCalls.push({
+              id: toolCall.id,
+              type: 'function' as const,
+              function: toolCall.function,
+            });
+          }
+        }
+      }
+
+      if (completionResponse.usage) {
+        usageData = {
+          prompt_tokens: completionResponse.usage.prompt_tokens,
+          completion_tokens: completionResponse.usage.completion_tokens,
+          total_tokens: completionResponse.usage.total_tokens,
+        };
+      }
+
+      // For non-streaming, use adapter to create complete message
+      if (!parser && fullContent) {
+        const syntheticResponse = {
+          choices: [
+            {
+              message: { content: fullContent, tool_calls: null },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: usageData,
+        };
+        yield this.messageToContent(
+          adapter.fromOpenAIComplete(syntheticResponse),
+        );
+        hasStreamedContent = true;
+      }
+    }
+
+    // Flush any remaining pending whitespace for Qwen
+    if (pendingWhitespace && this.isUsingQwen() && !parser) {
+      this.logger.debug(
+        () =>
+          `Flushing trailing pending whitespace (len=${pendingWhitespace?.length ?? 0}) at stream end`,
+      );
+      yield {
+        role: 'assistant',
+        parts: [{ text: pendingWhitespace }],
+      };
+      hasStreamedContent = true;
+      fullContent += pendingWhitespace;
+      pendingWhitespace = null;
+    }
+
+    // After stream ends, parse text-based tool calls if needed
+    if (parser && fullContent) {
+      const { cleanedContent, toolCalls } = parser.parse(fullContent);
+
+      if (toolCalls.length > 0) {
+        // Convert to standard format - use existing ID or generate for text-parsed tools
+        const standardToolCalls = toolCalls.map((tc, index) => ({
+          id: (tc as { id?: string }).id
+            ? this.transformToolId((tc as { id?: string }).id!)
+            : `call_${Date.now()}_${index}`,
+          type: 'function' as const,
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments),
+          },
+        }));
+
+        const syntheticResponse = {
+          choices: [
+            {
+              message: {
+                content: cleanedContent,
+                tool_calls: standardToolCalls,
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: usageData,
+        };
+        yield this.messageToContent(
+          adapter.fromOpenAIComplete(syntheticResponse),
+        );
+      } else {
+        // No tool calls found, yield cleaned content
+        const syntheticResponse = {
+          choices: [
+            {
+              message: { content: cleanedContent, tool_calls: null },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: usageData,
+        };
+        yield this.messageToContent(
+          adapter.fromOpenAIComplete(syntheticResponse),
+        );
+      }
+    } else {
+      // Standard OpenAI tool call handling
+      if (accumulatedToolCalls.length > 0) {
+        // Fix double stringification for Qwen tool calls
+        // Qwen models pre-stringify arguments values, but later in the process
+        // they are being JSON.stringify'd again
+        let fixedToolCalls = accumulatedToolCalls;
+        if (this.isUsingQwen()) {
+          this.logger.debug(
+            () =>
+              `[Qwen Fix] Processing ${accumulatedToolCalls.length} tool calls for double-stringification fix`,
+          );
+          fixedToolCalls = accumulatedToolCalls.map((toolCall, index) => {
+            this.logger.debug(
+              () =>
+                `[Qwen Fix] Tool call ${index}: ${JSON.stringify({
+                  name: toolCall.function.name,
+                  argumentsType: typeof toolCall.function.arguments,
+                  argumentsLength: toolCall.function.arguments?.length,
+                  argumentsSample: toolCall.function.arguments?.substring(
+                    0,
+                    100,
+                  ),
+                })}`,
+            );
+            // For Qwen, check for nested double-stringification
+            // Qwen models stringify array/object values WITHIN the JSON arguments
+            if (
+              toolCall.function.arguments &&
+              typeof toolCall.function.arguments === 'string'
+            ) {
+              try {
+                // First, parse the arguments to get the JSON object
+                const parsedArgs = JSON.parse(toolCall.function.arguments);
+                let hasNestedStringification = false;
+
+                // Check each property to see if it's a stringified array/object/number
+                const fixedArgs: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(parsedArgs)) {
+                  if (typeof value === 'string') {
+                    const trimmed = value.trim();
+
+                    // Check if it's a stringified number (integer or float)
+                    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+                      const numValue = trimmed.includes('.')
+                        ? parseFloat(trimmed)
+                        : parseInt(trimmed, 10);
+                      fixedArgs[key] = numValue;
+                      hasNestedStringification = true;
+                      this.logger.debug(
+                        () =>
+                          `[Qwen Fix] Fixed stringified number in property '${key}' for ${toolCall.function.name}: "${value}" -> ${numValue}`,
+                      );
+                    }
+                    // Check if it looks like a stringified array or object
+                    // Also check for Python-style dictionaries with single quotes
+                    else if (
+                      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+                      (trimmed.startsWith('{') && trimmed.endsWith('}'))
+                    ) {
+                      try {
+                        // Try to parse it as JSON
+                        const nestedParsed = JSON.parse(value);
+                        fixedArgs[key] = nestedParsed;
+                        hasNestedStringification = true;
+                        this.logger.debug(
+                          () =>
+                            `[Qwen Fix] Fixed nested stringification in property '${key}' for ${toolCall.function.name}`,
+                        );
+                      } catch {
+                        // Try to convert Python-style to JSON (single quotes to double quotes)
+                        try {
+                          const jsonified = value
+                            .replace(/'/g, '"')
+                            .replace(/: True/g, ': true')
+                            .replace(/: False/g, ': false')
+                            .replace(/: None/g, ': null');
+                          const nestedParsed = JSON.parse(jsonified);
+                          fixedArgs[key] = nestedParsed;
+                          hasNestedStringification = true;
+                          this.logger.debug(
+                            () =>
+                              `[Qwen Fix] Fixed Python-style nested stringification in property '${key}' for ${toolCall.function.name}`,
+                          );
+                        } catch {
+                          // Not valid JSON even after conversion, keep as string
+                          fixedArgs[key] = value;
+                        }
+                      }
+                    } else {
+                      fixedArgs[key] = value;
+                    }
+                  } else {
+                    fixedArgs[key] = value;
+                  }
+                }
+
+                if (hasNestedStringification) {
+                  this.logger.debug(
+                    () =>
+                      `[Qwen Fix] Fixed nested double-stringification for ${toolCall.function.name}`,
+                  );
+                  return {
+                    ...toolCall,
+                    function: {
+                      ...toolCall.function,
+                      arguments: JSON.stringify(fixedArgs),
+                    },
+                  };
+                }
+              } catch (_e) {
+                // If parsing fails, check for old-style double-stringification
+                if (
+                  toolCall.function.arguments.startsWith('"') &&
+                  toolCall.function.arguments.endsWith('"')
+                ) {
+                  try {
+                    // Old fix: entire arguments were double-stringified
+                    const parsedArgs = JSON.parse(toolCall.function.arguments);
+                    this.logger.debug(
+                      () =>
+                        `[Qwen Fix] Fixed whole-argument double-stringification for ${toolCall.function.name}`,
+                    );
+                    return {
+                      ...toolCall,
+                      function: {
+                        ...toolCall.function,
+                        arguments: JSON.stringify(parsedArgs),
+                      },
+                    };
+                  } catch {
+                    // Leave as-is if we can't parse
+                  }
+                }
+              }
+            }
+            // No fix needed
+            this.logger.debug(
+              () =>
+                `[Qwen Fix] No double-stringification detected for ${toolCall.function.name}, keeping original`,
+            );
+            return toolCall;
+          });
+        }
+
+        if (this.isUsingQwen()) {
+          this.logger.debug(
+            () =>
+              `Final message with tool calls: ${JSON.stringify({
+                contentLength: fullContent.length,
+                content:
+                  fullContent.substring(0, 200) +
+                  (fullContent.length > 200 ? '...' : ''),
+                toolCallCount: accumulatedToolCalls.length,
+                hasStreamedContent,
+              })}`,
+          );
+        }
+
+        // For Qwen models, don't duplicate content if we've already streamed it
+        const shouldOmitContent = hasStreamedContent && this.isUsingQwen();
+
+        this.logger.debug(
+          () => '[Tool Call Handling] Deciding how to yield tool calls',
+          {
+            hasStreamedContent,
+            isUsingQwen: this.isUsingQwen(),
+            shouldOmitContent,
+            fullContentLength: fullContent.length,
+            toolCallCount: fixedToolCalls?.length || 0,
+          },
+        );
+
+        if (shouldOmitContent) {
+          // Qwen: Send just a space to prevent stream stopping
+          const syntheticResponse = {
+            choices: [
+              {
+                message: {
+                  content: ' ', // Single space instead of empty to keep stream alive
+                  tool_calls: fixedToolCalls,
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: usageData,
+          };
+          yield this.messageToContent(
+            adapter.fromOpenAIComplete(syntheticResponse),
+          );
+        } else {
+          // Include full content with tool calls
+          const syntheticResponse = {
+            choices: [
+              {
+                message: {
+                  content: fullContent || '',
+                  tool_calls: fixedToolCalls,
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: usageData,
+          };
+          yield this.messageToContent(
+            adapter.fromOpenAIComplete(syntheticResponse),
+          );
+        }
+      } else if (usageData) {
+        // Always emit usage data so downstream consumers can update stats
+        const syntheticResponse = {
+          choices: [
+            {
+              message: { content: '', tool_calls: null },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: usageData,
+        };
+        yield this.messageToContent(
+          adapter.fromOpenAIComplete(syntheticResponse),
+        );
       }
     }
   }
@@ -1926,7 +2898,6 @@ export class OpenAIProvider extends BaseProvider {
    */
   formatToolsForAPI(tools: ITool[]): unknown {
     // For now, always use OpenAI format through OpenRouter
-    // TODO: Investigate if OpenRouter needs special handling for GLM/Qwen
     // const detectedFormat = this.detectToolFormat();
     // if (detectedFormat === 'qwen') {
     //   // Convert OpenAI format to Qwen format: {name, description, parameters} without type/function wrapper
@@ -1947,7 +2918,6 @@ export class OpenAIProvider extends BaseProvider {
    * @returns Parsed tool response
    */
   parseToolResponse(response: unknown): unknown {
-    // TODO: Implement response parsing based on detected format
     // For now, return the response as-is
     return response;
   }

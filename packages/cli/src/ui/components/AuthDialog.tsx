@@ -19,9 +19,6 @@ interface AuthDialogProps {
   initialErrorMessage?: string | null;
 }
 
-// TODO: Re-add _parseDefaultAuthType if needed for future auth type parsing
-// function was removed as it was unused
-
 export function AuthDialog({
   onSelect,
   settings,

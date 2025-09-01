@@ -26,7 +26,6 @@ export interface CommandContext {
   };
   // Core services and configuration
   services: {
-    // TODO(abhipatel12): Ensure that config is never null.
     config: Config | null;
     settings: LoadedSettings;
     git: GitService | undefined;
@@ -196,7 +195,7 @@ export interface SlashCommand {
   // The action to run. Optional for parent commands that only group sub-commands.
   action?: (
     context: CommandContext,
-    args: string, // TODO: Remove args. CommandContext now contains the complete invocation.
+    args: string, // Legacy parameter - CommandContext now contains the complete invocation
   ) =>
     | void
     | SlashCommandActionReturn

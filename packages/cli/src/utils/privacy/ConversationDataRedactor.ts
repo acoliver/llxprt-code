@@ -257,7 +257,6 @@ export class ConversationDataRedactor {
     return redacted;
   }
 
-  // TODO: Re-add redactContentPart method when needed for advanced content redaction
   // private redactContentPart(part: unknown, providerName: string): unknown {
 
   private redactToolParameters(params: unknown, toolName: string): unknown {
@@ -490,7 +489,6 @@ export class ConversationDataRedactor {
     return patterns;
   }
 
-  // TODO: Re-add isPatternEnabled method when needed for dynamic pattern checking
   // private isPatternEnabled(patternName: string): boolean {
 
   /**

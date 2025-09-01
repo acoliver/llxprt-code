@@ -624,6 +624,10 @@ function createMockProvider(name: string): IProvider & { baseUrl?: string } {
       yield { role: 'model', parts: [{ text: 'test response' }] };
     },
 
+    async *generateChatCompletionEx() {
+      throw new Error('generateChatCompletionEx not implemented in mock');
+    },
+
     getServerTools: () => [],
 
     invokeServerTool: async () => ({ result: 'test' }),

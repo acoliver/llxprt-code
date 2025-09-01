@@ -102,6 +102,9 @@ function createMockProvider(
         };
       }
     },
+    async *generateChatCompletionEx() {
+      throw new Error('generateChatCompletionEx not implemented in mock');
+    },
     getServerTools: vi
       .fn()
       .mockReturnValue(defaultCapabilities.tools ? ['search', 'analyze'] : []),

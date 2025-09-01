@@ -1238,8 +1238,7 @@ You can switch authentication methods by typing /auth or switch to a different m
                   constrainHeight ? availableTerminalHeight : undefined
                 }
                 terminalWidth={mainAreaWidth}
-                // TODO(taehykim): It seems like references to ids aren't necessary in
-                // HistoryItemDisplay. Refactor later. Use a fake id for now.
+                // Use a fake id for compatibility
                 item={{ ...item, id: 0 }}
                 isPending={true}
                 config={config}

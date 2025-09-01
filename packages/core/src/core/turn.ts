@@ -37,6 +37,7 @@ import type {
   ToolCall,
   ToolResponse,
   ToolCallStatus,
+  ToolCallDetail,
 } from '../services/history/types.js';
 import { HistoryState } from '../services/history/types.js';
 
@@ -460,7 +461,17 @@ export class Turn {
   getToolExecutionStatus(): ToolCallStatus | null {
     if (this.historyService) {
       try {
-        return this.historyService.getToolCallStatus();
+        const status = this.historyService.getToolCallStatus();
+        // Convert ToolExecutionStatus to ToolCallStatus
+        return {
+          pendingCalls: status.pendingCalls || 0,
+          responseCount: (status as { responseCount?: number }).responseCount || 0,
+          completedCalls: status.completedCalls || 0,
+          failedCalls: status.failedCalls || 0,
+          currentState: status.currentState as HistoryState,
+          executionOrder: (status as { executionOrder?: string[] }).executionOrder || [],
+          details: (status as { details?: ToolCallDetail[] }).details || [],
+        };
       } catch (error) {
         console.warn('Failed to get tool status from HistoryService:', error);
       }
@@ -474,7 +485,7 @@ export class Turn {
       failedCalls: 0, // Cannot determine without HistoryService
       currentState:
         this.pendingToolCalls.length > 0
-          ? HistoryState.TOOLS_EXECUTING
+          ? HistoryState.TRANSACTION_ACTIVE
           : HistoryState.IDLE,
       executionOrder: [],
       details: [],

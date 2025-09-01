@@ -47,6 +47,9 @@ describe('Provider Switching Integration', () => {
       async *generateChatCompletion() {
         yield { role: 'assistant', content: 'test response' };
       },
+      async *generateChatCompletionEx() {
+        throw new Error('generateChatCompletionEx not implemented in mock');
+      },
       getDefaultModel() {
         return 'test-model';
       },
@@ -83,6 +86,9 @@ describe('Provider Switching Integration', () => {
       async *generateChatCompletion() {
         yield { role: 'assistant', content: '' };
       },
+      async *generateChatCompletionEx() {
+        throw new Error('generateChatCompletionEx not implemented in mock');
+      },
       getDefaultModel() {
         return 'default';
       },
@@ -101,6 +107,9 @@ describe('Provider Switching Integration', () => {
       },
       async *generateChatCompletion() {
         yield { role: 'assistant', content: '' };
+      },
+      async *generateChatCompletionEx() {
+        throw new Error('generateChatCompletionEx not implemented in mock');
       },
       getDefaultModel() {
         return 'default';

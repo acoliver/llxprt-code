@@ -47,27 +47,20 @@ export class StateManager {
   canTransition(from: HistoryState, to: HistoryState): boolean {
     // Define valid transitions between states
     // Allow transitions from a state to itself
+    // @pseudocode tool-transactions.md:227-235
     const validTransitions: Record<HistoryState, HistoryState[]> = {
       [HistoryState.IDLE]: [
         HistoryState.IDLE,
         HistoryState.MODEL_RESPONDING,
-        HistoryState.TOOLS_PENDING,
+        HistoryState.TRANSACTION_ACTIVE,
       ],
       [HistoryState.MODEL_RESPONDING]: [
         HistoryState.MODEL_RESPONDING,
         HistoryState.IDLE,
-        HistoryState.TOOLS_PENDING,
+        HistoryState.TRANSACTION_ACTIVE,
       ],
-      [HistoryState.TOOLS_PENDING]: [
-        HistoryState.TOOLS_PENDING,
-        HistoryState.TOOLS_EXECUTING,
-        HistoryState.IDLE,
-      ],
-      [HistoryState.TOOLS_EXECUTING]: [
-        HistoryState.TOOLS_EXECUTING,
-        HistoryState.IDLE,
-        HistoryState.TOOLS_PENDING,
-      ],
+      [HistoryState.TRANSACTION_ACTIVE]: [HistoryState.TRANSACTION_COMMITTING],
+      [HistoryState.TRANSACTION_COMMITTING]: [HistoryState.IDLE],
     };
 
     return validTransitions[from]?.includes(to) || false;

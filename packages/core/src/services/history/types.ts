@@ -1,9 +1,9 @@
-export type MessageRole = 'user' | 'model' | 'system' | 'tool';
+export type MessageRole = 'user' | 'assistant' | 'model' | 'system' | 'tool';
 
 // MessageRole enum to match test expectations
 export const MessageRoleEnum = {
   USER: 'user' as MessageRole,
-  ASSISTANT: 'model' as MessageRole,
+  ASSISTANT: 'assistant' as MessageRole,
   MODEL: 'model' as MessageRole,
   SYSTEM: 'system' as MessageRole,
   TOOL: 'tool' as MessageRole,
@@ -28,6 +28,7 @@ export interface MessageMetadata {
   originalContent?: unknown; // Original content format before conversion
   contentType?: string; // Type of content (e.g., 'text', 'media', 'multimodal')
   // Add other metadata properties as needed
+  [key: string]: unknown; // Allow additional metadata properties for extensibility and testing
 }
 
 export interface Message {
@@ -52,8 +53,8 @@ export type MessageUpdate = {
 export enum HistoryState {
   IDLE = 'IDLE',
   MODEL_RESPONDING = 'MODEL_RESPONDING',
-  TOOLS_PENDING = 'TOOLS_PENDING',
-  TOOLS_EXECUTING = 'TOOLS_EXECUTING',
+  TRANSACTION_ACTIVE = 'TRANSACTION_ACTIVE',
+  TRANSACTION_COMMITTING = 'TRANSACTION_COMMITTING',
 }
 
 export interface ToolCall {
@@ -80,6 +81,7 @@ export interface ToolCallDetail {
 export interface ToolResponse {
   toolCallId: string; // Changed from 'id' to 'toolCallId' to match usage
   result: unknown;
+  error?: string; // Optional error field for cancellations/failures
 }
 
 export interface ToolCallStatus {
@@ -165,6 +167,16 @@ export interface ToolExecutionChain {
     timestamp: Date;
   }>;
   metadata: Record<string, unknown>;
+}
+
+// Tool Transaction interfaces for Phase 33
+export interface ToolTransaction {
+  id: string;
+  assistantMessage: Message | null;
+  toolCalls: Map<string, ToolCall>;
+  toolResponses: Map<string, ToolResponse>;
+  state: 'pending' | 'committed' | 'rolledback';
+  createdAt: number;
 }
 
 // EVENT SYSTEM REMOVED - Events were unnecessary overengineering

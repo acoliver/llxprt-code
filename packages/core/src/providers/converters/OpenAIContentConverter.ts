@@ -6,6 +6,10 @@
 import { Content, Part, FunctionCall } from '@google/genai';
 import { IContentConverter } from './IContentConverter.js';
 import { safeJsonStringify, safeJsonParse } from '../../utils/jsonUtils.js';
+import {
+  generateToolCallId,
+  generateShortId,
+} from '../../utils/idGenerator.js';
 
 // OpenAI message format types
 export interface OpenAIMessage {
@@ -45,6 +49,7 @@ export class OpenAIContentConverter implements IContentConverter {
     console.debug(
       `[OpenAIContentConverter] Converting ${contents.length} Gemini contents to OpenAI format`,
     );
+    console.debug(`[OpenAIContentConverter] === CONVERSION START ===`);
     contents.forEach((content, idx) => {
       const partTypes =
         content.parts
@@ -55,7 +60,23 @@ export class OpenAIContentConverter implements IContentConverter {
             return 'unknown';
           })
           .join(',') || 'no-parts';
-      console.debug(`  [${idx}] ${content.role}: ${partTypes}`);
+      console.debug(`  Content[${idx}] ${content.role}: ${partTypes}`);
+
+      // Log detailed part info
+      content.parts?.forEach((part, partIdx) => {
+        if ('functionCall' in part && part.functionCall) {
+          const fc = part.functionCall as any;
+          console.debug(
+            `    Part[${partIdx}]: functionCall id=${fc.id}, name=${fc.name}`,
+          );
+        }
+        if ('functionResponse' in part && part.functionResponse) {
+          const fr = part.functionResponse as any;
+          console.debug(
+            `    Part[${partIdx}]: functionResponse id=${fr.id}, name=${fr.name}`,
+          );
+        }
+      });
     });
 
     // Pseudocode line 13: INITIALIZE messages as empty array
@@ -102,15 +123,39 @@ export class OpenAIContentConverter implements IContentConverter {
               // Try to find matching call ID from pendingToolCalls
               responseId =
                 pendingToolCalls.get(part.functionResponse.name || 'unknown') ||
-                `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                generateShortId('resp');
               console.warn(
                 `[OpenAIContentConverter] Missing function response ID for '${part.functionResponse.name}', using: ${responseId}`,
               );
             }
             // Pseudocode line 22: ADD OpenAI message with role="tool", tool_call_id
+            // Handle cancelled tool responses specially for better compatibility
+            let toolContent = part.functionResponse.response;
+            if (typeof toolContent === 'object' && toolContent !== null) {
+              const response = toolContent as {
+                error?: string;
+                output?: string;
+                [key: string]: unknown;
+              };
+              // If it's a cancelled operation with only error field, add output for Qwen compatibility
+              if (response.error && !response.output) {
+                if (response.error.includes('[Operation Cancelled]')) {
+                  toolContent = {
+                    output: 'Tool execution cancelled by user request',
+                    ...response,
+                  };
+                } else {
+                  // General error handling - ensure there's always an output field
+                  toolContent = {
+                    output: `Error: ${response.error}`,
+                    ...response,
+                  };
+                }
+              }
+            }
             messages.push({
               role: 'tool',
-              content: safeJsonStringify(part.functionResponse.response),
+              content: safeJsonStringify(toolContent),
               tool_call_id: responseId,
             });
           }
@@ -134,7 +179,7 @@ export class OpenAIContentConverter implements IContentConverter {
             // Pseudocode line 33: CREATE toolCall with id, name, arguments
             let callId = (part.functionCall as { id?: string }).id;
             if (!callId) {
-              callId = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              callId = generateToolCallId();
               console.warn(
                 `[OpenAIContentConverter] Missing function call ID for '${part.functionCall.name}', generated: ${callId}`,
               );
@@ -193,6 +238,8 @@ export class OpenAIContentConverter implements IContentConverter {
       console.debug(`  [${idx}] ${details}`);
     });
 
+    console.debug(`[OpenAIContentConverter] === CONVERSION END ===`);
+
     // Pseudocode line 52: RETURN messages
     return messages;
   }
@@ -221,9 +268,7 @@ export class OpenAIContentConverter implements IContentConverter {
           if (tc.function && tc.function.name && tc.function.arguments) {
             // Ensure we always set the ID
             const functionCall: FunctionCall = {
-              id:
-                tc.id ||
-                `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              id: tc.id || generateToolCallId(),
               name: tc.function.name,
               args: safeJsonParse(tc.function.arguments, {}) as Record<
                 string,
@@ -265,7 +310,9 @@ export class OpenAIContentConverter implements IContentConverter {
         // Pseudocode line 66-69: FOR each toolCall in choice.message.tool_calls
         for (const toolCall of choice.message.tool_calls) {
           // Pseudocode line 67-68: CREATE functionCall part with name and args
+          // IMPORTANT: Preserve the tool call ID from OpenAI
           const functionCall: FunctionCall = {
+            id: toolCall.id,  // Preserve the ID from OpenAI!
             name: toolCall.function.name,
             args: safeJsonParse(toolCall.function.arguments, {}) as Record<
               string,

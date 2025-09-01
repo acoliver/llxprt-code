@@ -24,6 +24,14 @@ describe('GeminiCompatibleWrapper', () => {
             content: 'Test response',
           };
         }),
+        generateChatCompletionEx: vi
+          .fn()
+          .mockImplementation(async function* () {
+            yield {
+              role: 'assistant',
+              content: 'Test response from Ex',
+            };
+          }),
         getServerTools: () => [],
         invokeServerTool: vi
           .fn()
@@ -93,9 +101,9 @@ describe('GeminiCompatibleWrapper', () => {
         results.push(chunk);
       }
 
-      // Check that generateChatCompletion was called with converted tools
-      expect(mockProvider.generateChatCompletion).toHaveBeenCalled();
-      const [_messages, tools] = (mockProvider.generateChatCompletion as Mock)
+      // Check that generateChatCompletionEx was called with converted tools
+      expect(mockProvider.generateChatCompletionEx).toHaveBeenCalled();
+      const [_messages, tools] = (mockProvider.generateChatCompletionEx as Mock)
         .mock.calls[0];
 
       // Verify tools were converted correctly
@@ -139,6 +147,14 @@ describe('GeminiCompatibleWrapper', () => {
             content: 'Test response',
           };
         }),
+        generateChatCompletionEx: vi
+          .fn()
+          .mockImplementation(async function* () {
+            yield {
+              role: 'assistant',
+              content: 'Test response from Ex',
+            };
+          }),
         getServerTools: () => [],
         invokeServerTool: vi
           .fn()
@@ -184,9 +200,9 @@ describe('GeminiCompatibleWrapper', () => {
         results.push(chunk);
       }
 
-      // Check that generateChatCompletion was called with tools unchanged
-      expect(mockProvider.generateChatCompletion).toHaveBeenCalled();
-      const [_messages, tools] = (mockProvider.generateChatCompletion as Mock)
+      // Check that generateChatCompletionEx was called with tools unchanged
+      expect(mockProvider.generateChatCompletionEx).toHaveBeenCalled();
+      const [_messages, tools] = (mockProvider.generateChatCompletionEx as Mock)
         .mock.calls[0];
 
       // Verify tools remain unchanged

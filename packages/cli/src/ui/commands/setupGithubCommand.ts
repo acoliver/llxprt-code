@@ -19,7 +19,6 @@ import {
   SlashCommand,
   SlashCommandActionReturn,
 } from './types.js';
-// TODO: Re-add imports when the setup-github command is re-enabled
 // import { getUrlOpenCommand } from '../../ui/utils/commandUtils.js';
 // import { getGitHubRepoInfo } from '../../utils/gitUtils.js';
 
@@ -31,7 +30,6 @@ export const GITHUB_WORKFLOW_PATHS = [
   'pr-review/gemini-review.yml',
 ];
 
-// TODO: Reimplement getOpenUrlsCommands when the setup-github command is re-enabled
 // This function was removed because it's currently unused but kept for reference
 // function getOpenUrlsCommands(readmeUrl: string): string[] {
 //   // Determine the OS-specific command to open URLs, ex: 'open', 'xdg-open', etc
@@ -98,14 +96,7 @@ export const setupGithubCommand: SlashCommand = {
     'Set up GitHub Actions (currently disabled - needs adaptation for llxprt)',
   kind: CommandKind.BUILT_IN,
   action: (): SlashCommandActionReturn =>
-    // TODO: Adapt this command for llxprt-code
-    // Need to:
-    // 1. Create our own GitHub Actions repository (e.g., acoliver/run-llxprt-code or vybestack/run-llxprt-code)
-    // 2. Adapt the workflows to use llxprt instead of gemini
-    // 3. Support multi-provider configuration in the workflows
-    // 4. Update the URLs below to point to our repository
-    // 5. Consider including the cherry-picker workflow as part of the setup
-
+    // Command needs to be adapted for llxprt-code before re-enabling
     // For now, return an informative message
     ({
       type: 'message',

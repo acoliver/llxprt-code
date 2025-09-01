@@ -47,6 +47,9 @@ function createMockProvider(name: string): IProvider {
         role: ContentGeneratorRole.ASSISTANT,
       };
     }),
+    generateChatCompletionEx: vi.fn().mockImplementation(async function* () {
+      throw new Error('generateChatCompletionEx not implemented in mock');
+    }),
     getDefaultModel: vi.fn().mockReturnValue(`${name}-default-model`),
     getServerTools: vi.fn().mockReturnValue([]),
     invokeServerTool: vi.fn().mockResolvedValue({}),
@@ -403,6 +406,9 @@ describe('Multi-Provider Conversation Logging', () => {
           parts: [{ text: 'Chunk 3' }],
           role: ContentGeneratorRole.ASSISTANT,
         };
+      },
+      async *generateChatCompletionEx() {
+        throw new Error('generateChatCompletionEx not implemented in mock');
       },
       getDefaultModel: vi.fn().mockReturnValue('streaming-default-model'),
       getServerTools: vi.fn().mockReturnValue([]),

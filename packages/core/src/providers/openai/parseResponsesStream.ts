@@ -539,7 +539,6 @@ export async function* parseResponsesStream(
                   }
 
                   // Handle usage data by creating a final message with IMessage format for backward compatibility
-                  // TODO: In future phases this should also be converted to Content format
                   if (event.response.usage) {
                     const finalMessage: ContentWithMetadata = {
                       role: 'model',

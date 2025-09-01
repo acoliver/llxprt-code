@@ -28,9 +28,7 @@ import {
   EmojiFilter,
   FilterConfiguration,
   DebugLogger,
-  Turn,
-  HistoryService,
-  GeminiChat,
+  generateToolCallId,
 } from '@vybestack/llxprt-code-core';
 import { type Part, type PartListUnion, FinishReason } from '@google/genai';
 import {
@@ -96,6 +94,7 @@ enum StreamProcessingStatus {
 interface StreamProcessingResult {
   status: StreamProcessingStatus;
   hadToolCalls: boolean;
+  turn: import('@vybestack/llxprt-code-core').Turn | null;
 }
 
 /**
@@ -169,33 +168,7 @@ export const useGeminiStream = (
     return new GitService(config.getProjectRoot());
   }, [config]);
 
-  // Create HistoryService instance
-  const historyService = useMemo(
-    () => new HistoryService(`ui_session_${Date.now()}`),
-    [],
-  );
-
-  // Create Turn instance with HistoryService
-  const turn = useMemo(() => {
-    // Note: We don't need the actual chat instance for tool tracking
-    // Turn only uses it for streaming, not for tool execution
-    // Create a minimal stub that satisfies the GeminiChat interface
-    const chatStub = {} as GeminiChat;
-
-    const newTurn = new Turn(
-      chatStub,
-      config.getSessionId(),
-      'ui', // Provider name for UI context
-      historyService,
-      {
-        conversationId: `ui_conv_${config.getSessionId()}`,
-        messageId: `ui_msg_${Date.now()}`,
-      },
-    );
-    return newTurn;
-  }, [config, historyService]);
-
-  const [toolCalls, scheduleToolCalls, markToolsAsSubmitted] =
+  const [toolCalls, scheduleToolCalls, markToolsAsSubmitted, setSchedulerTurn] =
     useReactToolScheduler(
       async (completedToolCallsFromScheduler) => {
         // This onComplete is called when ALL scheduled tools for a given batch are done.
@@ -218,7 +191,6 @@ export const useGeminiStream = (
       setPendingHistoryItem,
       getPreferredEditor,
       onEditorClose,
-      turn,
     );
 
   const pendingToolCallGroupDisplay = useMemo(
@@ -415,7 +387,7 @@ export const useGeminiStream = (
             case 'schedule_tool': {
               const { toolName, toolArgs } = slashCommandResult;
               const toolCallRequest: ToolCallRequestInfo = {
-                callId: `${toolName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                callId: generateToolCallId(),
                 name: toolName,
                 args: toolArgs,
                 isClientInitiated: true,
@@ -857,7 +829,25 @@ export const useGeminiStream = (
       const filterConfig: FilterConfiguration = { mode: emojiFilterMode };
       const emojiFilter = new EmojiFilter(filterConfig);
 
-      for await (const event of stream) {
+      // Manually iterate to be able to capture a generator return value if provided
+      const iterator = (
+        stream as AsyncGenerator<
+          GeminiEvent,
+          import('@vybestack/llxprt-code-core').Turn
+        >
+      )[Symbol.asyncIterator]();
+      let _turn: import('@vybestack/llxprt-code-core').Turn | null = null;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const nextItem = (await iterator.next()) as
+          | { value: GeminiEvent; done: false }
+          | { value: import('@vybestack/llxprt-code-core').Turn; done: true };
+        if (nextItem.done) {
+          _turn =
+            nextItem.value as unknown as import('@vybestack/llxprt-code-core').Turn;
+          break;
+        }
+        const event = nextItem.value as GeminiEvent;
         switch (event.type) {
           case ServerGeminiEventType.Thought:
             setThought(event.value);
@@ -999,6 +989,7 @@ export const useGeminiStream = (
       return {
         status: StreamProcessingStatus.Completed,
         hadToolCalls: toolCallRequests.length > 0,
+        turn: _turn,
       };
     },
     [
@@ -1077,6 +1068,10 @@ export const useGeminiStream = (
           userMessageTimestamp,
           abortSignal,
         );
+        const activeTurn = processingResult.turn || null;
+        if (activeTurn) {
+          setSchedulerTurn(activeTurn);
+        }
 
         if (processingResult.status === StreamProcessingStatus.UserCancelled) {
           return;
@@ -1091,10 +1086,61 @@ export const useGeminiStream = (
           handleLoopDetectedEvent();
         }
 
-        // TODO: Continuation hook integration point - stub implementation
+        // Continuation hook integration point - stub implementation
         // This triggers todo continuation logic when stream completes
         // without tool calls but with active todos
         _handleStreamCompleted(processingResult.hadToolCalls);
+
+        // Bind Turn-aware tool completion handler for post-stream processing
+        if (activeTurn) {
+          handleCompletedToolsRef.current = async (tools) => {
+            try {
+              // Group and record into transaction
+              const toolsByPromptId = new Map<string, typeof tools>();
+              tools.forEach((t) => {
+                const pid = t.request.prompt_id;
+                if (!toolsByPromptId.has(pid)) toolsByPromptId.set(pid, []);
+                toolsByPromptId.get(pid)!.push(t);
+              });
+
+              for (const [_pid, tlist] of toolsByPromptId) {
+                for (const tc of tlist) {
+                  const callId = tc.request.callId;
+                  if (tc.status === 'cancelled') {
+                    await activeTurn.handleToolExecutionError(
+                      callId,
+                      new Error('User cancelled tool execution.'),
+                    );
+                  } else if ('response' in tc && tc.response) {
+                    const toolResult: import('@vybestack/llxprt-code-core').ToolResult =
+                      {
+                        llmContent: (tc as any).response.responseParts,
+                        returnDisplay: (tc as any).response.resultDisplay,
+                        summary: undefined,
+                      };
+                    await activeTurn.handleToolExecutionComplete(
+                      callId,
+                      toolResult,
+                    );
+                  }
+                }
+              }
+            } catch (err) {
+              streamLogger.debug(
+                () =>
+                  `HistoryService transaction error: ${getErrorMessage(err)}`,
+              );
+            }
+
+            // Automatically continue the conversation using the updated history
+            // No fake user message needed - just let the model continue from where it left off
+            submitQuery(
+              [], // Empty message - continue from history
+              { isContinuation: true },
+              tools[0]?.request.prompt_id,
+            );
+          };
+        }
       } catch (error: unknown) {
         if (error instanceof UnauthorizedError) {
           onAuthError();
@@ -1301,15 +1347,10 @@ export const useGeminiStream = (
         );
 
         if (allToolsCancelled) {
-          // When all tools are cancelled, add a cancelled message to history
-          await geminiClient.addHistory({
-            role: 'user',
-            parts: [{ text: 'cancelled' }],
-          });
-
+          // Record cancellations via Turn transactions (bound after stream)
           streamLogger.debug(
             () =>
-              `[CANCELLATION] All ${toolsToProcess.length} tools cancelled - added cancelled message to history`,
+              `[CANCELLATION] All ${toolsToProcess.length} tools cancelled - recording cancellation via transaction`,
           );
 
           const callIdsToMarkAsSubmitted = toolsToProcess.map(
@@ -1359,17 +1400,15 @@ export const useGeminiStream = (
           }
         }
 
-        // REMOVED: Building responsesToSend array - no longer needed
-        // Tool responses are now committed to HistoryService by CoreToolScheduler
-        // via turn.handleToolExecutionComplete(). We don't manually send them.
+        // Rely on Turn-bound handler (set after stream) to commit responses transactionally
 
-        // Clear any queued system feedback since we're not sending responses manually
+        // Clear any queued system feedback since we’re delegating to the bound handler
         if (queuedSystemFeedbackRef.current.length > 0) {
           const feedbackMessages = queuedSystemFeedbackRef.current.join('\n');
           queuedSystemFeedbackRef.current = []; // Clear the queue
           streamLogger.debug(
             () =>
-              `Cleared queued system feedback (now handled by HistoryService): ${feedbackMessages}`,
+              `Cleared queued system feedback (handled via transaction): ${feedbackMessages}`,
           );
         }
 
@@ -1398,15 +1437,10 @@ export const useGeminiStream = (
         );
 
         if (allCancelled) {
-          // If all tools were cancelled, add a history entry directly instead of calling the API
-          await geminiClient.addHistory({
-            role: 'user',
-            parts: [{ text: 'cancelled' }],
-          });
-
+          // Record cancellations via transaction-bound handler (if set)
           streamLogger.debug(
             () =>
-              `All ${toolsToProcess.length} tool calls were cancelled - added history entry directly`,
+              `All ${toolsToProcess.length} tool calls were cancelled - recording via transaction`,
           );
         } else {
           // Build tool responses to send back to the model
@@ -1415,14 +1449,9 @@ export const useGeminiStream = (
           const responsesToSend: Part[] = [];
 
           for (const toolCall of toolsToProcess) {
+            // Skip cancelled tools - fixOrphans will handle them
             if (toolCall.status === 'cancelled') {
-              responsesToSend.push({
-                functionResponse: {
-                  id: toolCall.request.callId,
-                  name: toolCall.request.name,
-                  response: { cancelled: true },
-                },
-              });
+              continue;
             } else if ('response' in toolCall && toolCall.response) {
               // For completed tools (success or error), use the responseParts
               const completedCall = toolCall as TrackedCompletedToolCall;
@@ -1433,23 +1462,26 @@ export const useGeminiStream = (
             }
           }
 
-          // Send the tool responses back to continue the conversation
-          // Note: HistoryService validates these through Turn.handleToolExecutionComplete()
-          // which prevents orphaned tool calls, but we still need to send them
-          if (responsesToSend.length > 0) {
-            streamLogger.debug(
-              () =>
-                `Sending ${responsesToSend.length} tool responses via submitQuery (validated by HistoryService)`,
+          // If a Turn-bound handler is available, delegate submission/commit
+          if (handleCompletedToolsRef.current) {
+            await handleCompletedToolsRef.current(toolsToProcess);
+            const callIdsToMarkAsSubmitted = toolsToProcess.map(
+              (toolCall) => toolCall.request.callId,
             );
-
-            submitQuery(
-              responsesToSend,
-              {
-                isContinuation: true,
-              },
-              promptId,
-            );
+            markToolsAsSubmitted(callIdsToMarkAsSubmitted);
+            continue;
           }
+
+          // Always continue the conversation after tools complete
+          // Even if no Turn-aware handler is available, we need to continue
+          streamLogger.debug(
+            () =>
+              `Continuing conversation after ${toolsToProcess.length} tools completed`,
+          );
+          
+          // Send empty message to continue from history (which now includes tool responses)
+          // The provider will see the tool responses in history and continue
+          submitQuery([], { isContinuation: true }, promptId);
         }
 
         // Mark tools as submitted for UI state tracking

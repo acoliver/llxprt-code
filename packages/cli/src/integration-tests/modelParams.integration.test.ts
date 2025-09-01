@@ -141,6 +141,9 @@ describe('Model Parameters and Profiles Integration Tests', () => {
         { id: 'gpt-4o-mini', name: 'GPT-4.0 Mini' },
       ]),
       generateChatCompletion: vi.fn(),
+      generateChatCompletionEx: vi.fn().mockImplementation(async function* () {
+        throw new Error('generateChatCompletionEx not implemented in mock');
+      }),
       getServerTools: vi.fn().mockReturnValue([]),
       invokeServerTool: vi.fn().mockResolvedValue(undefined),
       setModelParams: vi.fn(),
@@ -769,6 +772,9 @@ describe('Model Parameters and Profiles Integration Tests', () => {
         name: 'basic-provider',
         getModels: vi.fn().mockResolvedValue([]),
         generateChatCompletion: vi.fn(),
+        generateChatCompletionEx: vi.fn().mockImplementation(async function* () {
+          throw new Error('generateChatCompletionEx not implemented in mock');
+        }),
         getServerTools: vi.fn().mockReturnValue([]),
         invokeServerTool: vi.fn().mockResolvedValue(undefined),
         // No setModelParams or getModelParams

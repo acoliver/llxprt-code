@@ -117,8 +117,6 @@ export interface OutputConfig {
 export interface ModelConfig {
   /**
    * The name or identifier of the model to be used (e.g., 'gemini-2.5-pro').
-   *
-   * TODO: In the future, this needs to support 'auto' or some other string to support routing use cases.
    */
   model: string;
   /**
@@ -135,8 +133,6 @@ export interface ModelConfig {
  * Configures the execution environment and constraints for the subagent.
  * This interface defines parameters that control the subagent's runtime behavior,
  * such as maximum execution time, to prevent infinite loops or excessive resource consumption.
- *
- * TODO: Consider adding max_tokens as a form of budgeting.
  */
 export interface RunConfig {
   /** The maximum execution time for the subagent in minutes. */

@@ -40,6 +40,9 @@ describe('setCommand', () => {
       name: 'test-provider',
       getModels: vi.fn().mockResolvedValue([]),
       generateChatCompletion: vi.fn(),
+      generateChatCompletionEx: vi.fn().mockImplementation(async function* () {
+        throw new Error('generateChatCompletionEx not implemented in mock');
+      }),
       getDefaultModel: vi.fn().mockReturnValue('default'),
       getServerTools: vi.fn().mockReturnValue([]),
       invokeServerTool: vi.fn().mockResolvedValue(undefined),

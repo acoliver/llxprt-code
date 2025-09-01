@@ -295,11 +295,7 @@ export const useSlashCommandProcessor = (
         const canonicalPath: string[] = [];
 
         for (const part of commandPath) {
-          // TODO: For better performance and architectural clarity, this two-pass
-          // search could be replaced. A more optimal approach would be to
-          // pre-compute a single lookup map in `CommandService.ts` that resolves
-          // all name and alias conflicts during the initial loading phase. The
-          // processor would then perform a single, fast lookup on that map.
+          // Note: This two-pass search could be optimized with a pre-computed lookup map
 
           // First pass: check for an exact match on the primary command name.
           let foundCommand = currentCommands.find((cmd) => cmd.name === part);

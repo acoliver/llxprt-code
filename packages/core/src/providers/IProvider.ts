@@ -17,6 +17,7 @@
 import { Content } from '@google/genai';
 import { IModel } from './IModel.js';
 import { ITool } from './ITool.js';
+import type { Message as HistoryMessage } from '../services/history/types.js';
 
 // @plan PLAN-20250128-HISTORYSERVICE.P29
 // @requirement HS-041
@@ -36,6 +37,18 @@ export interface IProvider {
     toolFormat?: string,
     sessionId?: string, // NEW optional parameter
   ): AsyncIterableIterator<Content>;
+
+  /**
+   * New bridge method using HistoryService format
+   * @phase provider-bridge
+   * @plan PLAN-20250128-HISTORYSERVICE
+   */
+  generateChatCompletionEx(
+    messages: HistoryMessage[],
+    tools?: ITool[],
+    toolFormat?: string,
+    sessionId?: string,
+  ): AsyncIterableIterator<HistoryMessage>;
   setModel?(modelId: string): void;
   getCurrentModel?(): string;
   getDefaultModel(): string;

@@ -20,7 +20,6 @@ import {
   ToolCall,
   Status as CoreStatus,
   EditorType,
-  Turn,
 } from '@vybestack/llxprt-code-core';
 import { useCallback, useState, useMemo } from 'react';
 import {
@@ -71,8 +70,12 @@ export function useReactToolScheduler(
   >,
   getPreferredEditor: () => EditorType | undefined,
   onEditorClose: () => void,
-  turn: Turn,
-): [TrackedToolCall[], ScheduleFn, MarkToolsAsSubmittedFn] {
+): [
+  TrackedToolCall[],
+  ScheduleFn,
+  MarkToolsAsSubmittedFn,
+  (turn?: import('@vybestack/llxprt-code-core').Turn) => void,
+] {
   const [toolCallsForDisplay, setToolCallsForDisplay] = useState<
     TrackedToolCall[]
   >([]);
@@ -147,7 +150,6 @@ export function useReactToolScheduler(
         getPreferredEditor,
         config,
         onEditorClose,
-        turn,
       }),
     [
       config,
@@ -156,7 +158,6 @@ export function useReactToolScheduler(
       toolCallsUpdateHandler,
       getPreferredEditor,
       onEditorClose,
-      turn,
     ],
   );
 
@@ -183,7 +184,20 @@ export function useReactToolScheduler(
     [],
   );
 
-  return [toolCallsForDisplay, schedule, markToolsAsSubmitted];
+  const setSchedulerTurn = useCallback(
+    (turn?: import('@vybestack/llxprt-code-core').Turn) => {
+      // TODO: CoreToolScheduler doesn't have setTurn method yet
+      // scheduler.setTurn(turn);
+    },
+    [scheduler],
+  );
+
+  return [
+    toolCallsForDisplay,
+    schedule,
+    markToolsAsSubmitted,
+    setSchedulerTurn,
+  ];
 }
 
 /**

@@ -39,6 +39,9 @@ describe('Provider-Gemini Switching', () => {
       async *generateChatCompletion() {
         yield { role: 'assistant', content: 'test response' };
       },
+      async *generateChatCompletionEx() {
+        throw new Error('generateChatCompletionEx not implemented in mock');
+      },
       getCurrentModel() {
         return 'model-1';
       },

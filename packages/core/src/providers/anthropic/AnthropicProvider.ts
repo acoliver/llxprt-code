@@ -13,6 +13,7 @@ import { BaseProvider, BaseProviderConfig } from '../BaseProvider.js';
 import { OAuthManager } from '../../auth/precedence.js';
 import { getSettingsService } from '../../settings/settingsServiceInstance.js';
 import { AnthropicContentConverter } from '../converters/AnthropicContentConverter.js';
+import type { Message as HistoryMessage } from '../../services/history/types.js';
 
 export class AnthropicProvider extends BaseProvider {
   private logger: DebugLogger;
@@ -1087,5 +1088,22 @@ ${systemMessage}`;
    */
   override async isAuthenticated(): Promise<boolean> {
     return super.isAuthenticated();
+  }
+
+  /**
+   * New bridge method using HistoryService format
+   * @phase provider-bridge
+   * @plan PLAN-20250128-HISTORYSERVICE
+   * NOOP - Not yet implemented for Anthropic
+   */
+  override async *generateChatCompletionEx(
+    _messages: HistoryMessage[],
+    _tools?: ITool[],
+    _toolFormat?: string,
+    _sessionId?: string,
+  ): AsyncIterableIterator<HistoryMessage> {
+    throw new Error(
+      'generateChatCompletionEx not yet implemented for AnthropicProvider',
+    );
   }
 }

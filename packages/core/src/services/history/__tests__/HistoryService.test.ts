@@ -257,7 +257,7 @@ describe('HistoryService Core Functionality', () => {
       );
       _messageId2 = historyService.addMessage(
         'Hello assistant message',
-        MessageRoleEnum.ASSISTANT,
+        MessageRoleEnum.MODEL,
       );
       messageId3 = historyService.addMessage(
         'Another user message',
@@ -290,7 +290,209 @@ describe('HistoryService Core Functionality', () => {
       expect(lastModelMessage).not.toBeNull();
       expect(lastModelMessage!.id).toBe(_messageId2);
       expect(lastModelMessage!.content).toBe('Hello assistant message');
-      expect(lastModelMessage!.role).toBe(MessageRoleEnum.ASSISTANT);
+      expect(lastModelMessage!.role).toBe(MessageRoleEnum.MODEL);
+    });
+  });
+
+  describe('Tool Response vs User Message Detection', () => {
+    // This test demonstrates the current bug where tool responses are incorrectly
+    // triggering orphan prevention, creating duplicate synthetic responses
+    it.skip('should NOT create synthetic responses when receiving tool responses - ORPHAN HANDLING REMOVED', () => {
+      // Setup: Add a model message with a tool call
+      const modelMessageId = historyService.addMessage(
+        'I will search for files',
+        MessageRoleEnum.MODEL,
+        {
+          originalContent: {
+            role: 'model',
+            parts: [
+              { text: 'I will search for files' },
+              {
+                functionCall: {
+                  id: 'tool123',
+                  name: 'glob',
+                  args: { pattern: '**/*.ts' },
+                },
+              },
+            ],
+          },
+        },
+      );
+
+      // The model message should have been added and tool call should be tracked
+      expect(historyService.getMessages()).toHaveLength(1);
+      expect(historyService.hasPendingToolCalls()).toBe(true);
+
+      // Now simulate a tool response coming from geminiChat.recordHistory
+      // This is what currently triggers the bug - it's marked as role: 'user'
+      // but it's actually a tool response, not real user input
+      const toolResponseId = historyService.addMessage(
+        '[Tool response]',
+        MessageRoleEnum.USER,
+        {
+          source: 'geminiChat.toolResponse', // Source indicates this is a tool response
+          originalContent: {
+            role: 'user',
+            parts: [
+              {
+                functionResponse: {
+                  id: 'tool123',
+                  name: 'glob',
+                  response: {
+                    output: 'Found 100 files',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      );
+
+      // Check the messages
+      const messages = historyService.getMessages();
+
+      // BUG: Currently this will FAIL because the orphan prevention logic
+      // incorrectly creates a synthetic response when it sees a "user" message
+      // while tool calls are pending, even though this is actually a tool response
+
+      // We should have exactly 2 messages: the model message and the tool response
+      expect(messages).toHaveLength(2);
+      expect(messages[0].id).toBe(modelMessageId);
+      expect(messages[1].id).toBe(toolResponseId);
+
+      // There should NOT be a synthetic response message
+      const syntheticMessages = messages.filter(
+        (m) => m.metadata?.synthetic === true,
+      );
+      expect(syntheticMessages).toHaveLength(0);
+
+      // The pending tool calls should have been cleared by the tool response
+      expect(historyService.hasPendingToolCalls()).toBe(false);
+    });
+
+    // NEW TEST: This test verifies the fix for the duplicate tool response bug
+    it.skip('should NOT create synthetic responses even when source is userInput if functionResponse parts exist - ORPHAN HANDLING REMOVED', () => {
+      // Setup: Add a model message with a tool call
+      const modelMessageId = historyService.addMessage(
+        'I will search for files',
+        MessageRoleEnum.MODEL,
+        {
+          originalContent: {
+            role: 'model',
+            parts: [
+              { text: 'I will search for files' },
+              {
+                functionCall: {
+                  id: 'tool123',
+                  name: 'search_file_content',
+                  args: { pattern: 'tool call.*LLM' },
+                },
+              },
+            ],
+          },
+        },
+      );
+
+      // The model message should have been added and tool call should be tracked
+      expect(historyService.getMessages()).toHaveLength(1);
+      expect(historyService.hasPendingToolCalls()).toBe(true);
+
+      // This simulates the BUG scenario: tool response with wrong source metadata
+      // BUT with our fix, it should NOT create a synthetic response because
+      // we now also check for the presence of functionResponse parts
+      const toolResponseId = historyService.addMessage(
+        '[Tool response]',
+        MessageRoleEnum.USER,
+        {
+          source: 'geminiChat.userInput', // WRONG SOURCE (bug scenario)
+          originalContent: {
+            role: 'user',
+            parts: [
+              {
+                functionResponse: {
+                  id: 'tool123',
+                  name: 'search_file_content',
+                  response: {
+                    output: 'Found 5 matches',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      );
+
+      // Check the messages
+      const messages = historyService.getMessages();
+
+      // WITH THE FIX: We should have exactly 2 messages (no synthetic response)
+      expect(messages).toHaveLength(2);
+      expect(messages[0].id).toBe(modelMessageId);
+      expect(messages[1].id).toBe(toolResponseId);
+
+      // There should be NO synthetic response message
+      const syntheticMessages = messages.filter(
+        (m) => m.metadata?.synthetic === true,
+      );
+      expect(syntheticMessages).toHaveLength(0);
+
+      // The pending tool calls should have been cleared by the tool response
+      expect(historyService.hasPendingToolCalls()).toBe(false);
+    });
+
+    it.skip('should create synthetic responses when receiving real user input during pending tool calls - ORPHAN HANDLING REMOVED', () => {
+      // Setup: Add a model message with a tool call
+      historyService.addMessage(
+        'I will search for files',
+        MessageRoleEnum.MODEL,
+        {
+          originalContent: {
+            role: 'model',
+            parts: [
+              { text: 'I will search for files' },
+              {
+                functionCall: {
+                  id: 'tool456',
+                  name: 'read_file',
+                  args: { path: '/test.ts' },
+                },
+              },
+            ],
+          },
+        },
+      );
+
+      expect(historyService.hasPendingToolCalls()).toBe(true);
+
+      // Now simulate REAL user input (not a tool response)
+      // This SHOULD trigger orphan prevention
+      historyService.addMessage(
+        'Actually, never mind, do something else',
+        MessageRoleEnum.USER,
+        {
+          source: 'geminiChat.userInput', // This is the source for real user input
+          originalContent: {
+            role: 'user',
+            parts: [{ text: 'Actually, never mind, do something else' }],
+          },
+        },
+      );
+
+      // Check that synthetic response was created
+      const messages = historyService.getMessages();
+
+      // We should have: model message, synthetic response, user message
+      expect(messages.length).toBeGreaterThanOrEqual(3);
+
+      // Find the synthetic response
+      const syntheticMessages = messages.filter(
+        (m) => m.metadata?.synthetic === true,
+      );
+      expect(syntheticMessages).toHaveLength(1);
+      expect(syntheticMessages[0].metadata?.fixedOrphans).toContain('tool456');
+
+      // Pending tool calls should be cleared
+      expect(historyService.hasPendingToolCalls()).toBe(false);
     });
   });
 });

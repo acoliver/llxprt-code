@@ -29,7 +29,6 @@ export async function getPackageJson(): Promise<PackageJson | undefined> {
 
   const result = await readPackageUp({ cwd: __dirname });
   if (!result) {
-    // TODO: Maybe bubble this up as an error.
     return;
   }
 

@@ -108,6 +108,9 @@ function createMockProvider(name: string, responseDelay = 0): IProvider {
         role: ContentGeneratorRole.ASSISTANT,
       };
     },
+    async *generateChatCompletionEx() {
+      throw new Error('generateChatCompletionEx not implemented in mock');
+    },
     getDefaultModel: vi.fn().mockReturnValue(`${name}-default`),
     getServerTools: vi.fn().mockReturnValue([]),
     invokeServerTool: vi.fn().mockResolvedValue({}),

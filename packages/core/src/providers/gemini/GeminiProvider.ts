@@ -25,6 +25,7 @@ import type {
 import { BaseProvider, BaseProviderConfig } from '../BaseProvider.js';
 import { OAuthManager } from '../../auth/precedence.js';
 import { getSettingsService } from '../../settings/settingsServiceInstance.js';
+import type { Message as HistoryMessage } from '../../services/history/types.js';
 
 /**
  * @plan PLAN-20250822-GEMINIFALLBACK.P12
@@ -1131,5 +1132,22 @@ export class GeminiProvider extends BaseProvider {
     } else {
       throw new Error(`Unknown server tool: ${toolName}`);
     }
+  }
+
+  /**
+   * New bridge method using HistoryService format
+   * @phase provider-bridge
+   * @plan PLAN-20250128-HISTORYSERVICE
+   * NOOP - Not yet implemented for Gemini
+   */
+  override async *generateChatCompletionEx(
+    _messages: HistoryMessage[],
+    _tools?: ITool[],
+    _toolFormat?: string,
+    _sessionId?: string,
+  ): AsyncIterableIterator<HistoryMessage> {
+    throw new Error(
+      'generateChatCompletionEx not yet implemented for GeminiProvider',
+    );
   }
 }
