@@ -13,6 +13,17 @@ import {
 } from '@vybestack/llxprt-code-core';
 import { CustomTheme } from '../ui/themes/theme.js';
 
+export enum MergeStrategy {
+  // Replace the old value with the new value. This is the default.
+  REPLACE = 'replace',
+  // Concatenate arrays.
+  CONCAT = 'concat',
+  // Merge arrays, ensuring unique values.
+  UNION = 'union',
+  // Shallow merge objects.
+  SHALLOW_MERGE = 'shallow_merge',
+}
+
 export interface SettingDefinition {
   type: 'boolean' | 'string' | 'number' | 'array' | 'object';
   label: string;
@@ -25,6 +36,7 @@ export interface SettingDefinition {
   key?: string;
   properties?: SettingsSchema;
   showInDialog?: boolean;
+  mergeStrategy?: MergeStrategy;
 }
 
 export interface SettingsSchema {
@@ -408,6 +420,7 @@ export const SETTINGS_SCHEMA = {
     default: {} as Record<string, MCPServerConfig>,
     description: 'Configuration for MCP servers.',
     showInDialog: false,
+    mergeStrategy: MergeStrategy.SHALLOW_MERGE,
   },
   allowMCPServers: {
     type: 'array',
@@ -436,14 +449,358 @@ export const SETTINGS_SCHEMA = {
     description: 'Telemetry configuration.',
     showInDialog: false,
   },
-  bugCommand: {
+  // Model section - expanded from upstream to match new structure
+  model: {
     type: 'object',
-    label: 'Bug Command',
+    label: 'Model',
+    category: 'Model',
+    requiresRestart: false,
+    default: {},
+    description: 'Settings related to the generative model.',
+    showInDialog: false,
+    properties: {
+      name: {
+        type: 'string',
+        label: 'Model',
+        category: 'Model',
+        requiresRestart: false,
+        default: undefined as string | undefined,
+        description: 'The model to use for conversations.',
+        showInDialog: false,
+      },
+      maxSessionTurns: {
+        type: 'number',
+        label: 'Max Session Turns',
+        category: 'Model',
+        requiresRestart: false,
+        default: -1,
+        description:
+          'Maximum number of user/model/tool turns to keep in a session. -1 means unlimited.',
+        showInDialog: true,
+      },
+      summarizeToolOutput: {
+        type: 'object',
+        label: 'Summarize Tool Output',
+        category: 'Model',
+        requiresRestart: false,
+        default: undefined as
+          | Record<string, { tokenBudget?: number }>
+          | undefined,
+        description: 'Settings for summarizing tool output.',
+        showInDialog: false,
+      },
+      chatCompression: {
+        type: 'object',
+        label: 'Chat Compression',
+        category: 'Model',
+        requiresRestart: false,
+        default: undefined as ChatCompressionSettings | undefined,
+        description: 'Chat compression settings.',
+        showInDialog: false,
+      },
+      skipNextSpeakerCheck: {
+        type: 'boolean',
+        label: 'Skip Next Speaker Check',
+        category: 'Model',
+        requiresRestart: false,
+        default: true,
+        description: 'Skip the next speaker check.',
+        showInDialog: true,
+      },
+    },
+  },
+
+  context: {
+    type: 'object',
+    label: 'Context',
+    category: 'Context',
+    requiresRestart: false,
+    default: {},
+    description: 'Settings for managing context provided to the model.',
+    showInDialog: false,
+    properties: {
+      fileName: {
+        type: 'object',
+        label: 'Context File Name',
+        category: 'Context',
+        requiresRestart: false,
+        default: undefined as string | string[] | undefined,
+        description: 'The name of the context file.',
+        showInDialog: false,
+      },
+      importFormat: {
+        type: 'string',
+        label: 'Memory Import Format',
+        category: 'Context',
+        requiresRestart: false,
+        default: undefined as MemoryImportFormat | undefined,
+        description: 'The format to use when importing memory.',
+        showInDialog: false,
+      },
+      discoveryMaxDirs: {
+        type: 'number',
+        label: 'Memory Discovery Max Dirs',
+        category: 'Context',
+        requiresRestart: false,
+        default: 200,
+        description: 'Maximum number of directories to search for memory.',
+        showInDialog: true,
+      },
+      includeDirectories: {
+        type: 'array',
+        label: 'Include Directories',
+        category: 'Context',
+        requiresRestart: false,
+        default: [] as string[],
+        description:
+          'Additional directories to include in the workspace context. Missing directories will be skipped with a warning.',
+        showInDialog: false,
+        mergeStrategy: MergeStrategy.CONCAT,
+      },
+      loadFromIncludeDirectories: {
+        type: 'boolean',
+        label: 'Load Memory From Include Directories',
+        category: 'Context',
+        requiresRestart: false,
+        default: false,
+        description: 'Whether to load memory files from include directories.',
+        showInDialog: true,
+      },
+      fileFiltering: {
+        type: 'object',
+        label: 'File Filtering',
+        category: 'Context',
+        requiresRestart: true,
+        default: {},
+        description: 'Settings for git-aware file filtering.',
+        showInDialog: false,
+        properties: {
+          respectGitIgnore: {
+            type: 'boolean',
+            label: 'Respect .gitignore',
+            category: 'File Filtering',
+            requiresRestart: true,
+            default: true,
+            description: 'Respect .gitignore files when searching',
+            showInDialog: true,
+          },
+          respectLlxprtIgnore: {
+            type: 'boolean',
+            label: 'Respect .llxprtignore',
+            category: 'File Filtering',
+            requiresRestart: true,
+            default: true,
+            description: 'Respect .llxprtignore files when searching',
+            showInDialog: true,
+          },
+          enableRecursiveFileSearch: {
+            type: 'boolean',
+            label: 'Enable Recursive File Search',
+            category: 'File Filtering',
+            requiresRestart: true,
+            default: true,
+            description: 'Enable recursive file search functionality',
+            showInDialog: true,
+          },
+          disableFuzzySearch: {
+            type: 'boolean',
+            label: 'Disable Fuzzy Search',
+            category: 'File Filtering',
+            requiresRestart: true,
+            default: false,
+            description: 'Disable fuzzy search when searching for files.',
+            showInDialog: true,
+          },
+        },
+      },
+    },
+  },
+
+  tools: {
+    type: 'object',
+    label: 'Tools',
+    category: 'Tools',
+    requiresRestart: true,
+    default: {},
+    description: 'Settings for built-in and custom tools.',
+    showInDialog: false,
+    properties: {
+      sandbox: {
+        type: 'object',
+        label: 'Sandbox',
+        category: 'Tools',
+        requiresRestart: true,
+        default: undefined as boolean | string | undefined,
+        description:
+          'Sandbox execution environment (can be a boolean or a path string).',
+        showInDialog: false,
+      },
+      usePty: {
+        type: 'boolean',
+        label: 'Use node-pty for Shell Execution',
+        category: 'Tools',
+        requiresRestart: true,
+        default: false,
+        description:
+          'Use node-pty for shell command execution. Fallback to child_process still applies.',
+        showInDialog: true,
+      },
+      autoAccept: {
+        type: 'boolean',
+        label: 'Auto Accept',
+        category: 'Tools',
+        requiresRestart: false,
+        default: false,
+        description:
+          'Automatically accept and execute tool calls that are considered safe (e.g., read-only operations).',
+        showInDialog: true,
+      },
+      core: {
+        type: 'array',
+        label: 'Core Tools',
+        category: 'Tools',
+        requiresRestart: true,
+        default: undefined as string[] | undefined,
+        description: 'Paths to core tool definitions.',
+        showInDialog: false,
+      },
+      allowed: {
+        type: 'array',
+        label: 'Allowed Tools',
+        category: 'Advanced',
+        requiresRestart: true,
+        default: undefined as string[] | undefined,
+        description:
+          'A list of tool names that will bypass the confirmation dialog.',
+        showInDialog: false,
+      },
+      exclude: {
+        type: 'array',
+        label: 'Exclude Tools',
+        category: 'Tools',
+        requiresRestart: true,
+        default: undefined as string[] | undefined,
+        description: 'Tool names to exclude from discovery.',
+        showInDialog: false,
+      },
+      discoveryCommand: {
+        type: 'string',
+        label: 'Tool Discovery Command',
+        category: 'Tools',
+        requiresRestart: true,
+        default: undefined as string | undefined,
+        description: 'Command to run for tool discovery.',
+        showInDialog: false,
+      },
+      callCommand: {
+        type: 'string',
+        label: 'Tool Call Command',
+        category: 'Tools',
+        requiresRestart: true,
+        default: undefined as string | undefined,
+        description: 'Command to run for tool calls.',
+        showInDialog: false,
+      },
+      useRipgrep: {
+        type: 'boolean',
+        label: 'Use Ripgrep',
+        category: 'Tools',
+        requiresRestart: false,
+        default: false,
+        description:
+          'Use ripgrep for file content search instead of the fallback implementation. Provides faster search performance.',
+        showInDialog: true,
+      },
+    },
+  },
+
+  mcp: {
+    type: 'object',
+    label: 'MCP',
+    category: 'MCP',
+    requiresRestart: true,
+    default: {},
+    description: 'Settings for Model Context Protocol (MCP) servers.',
+    showInDialog: false,
+    properties: {
+      serverCommand: {
+        type: 'string',
+        label: 'MCP Server Command',
+        category: 'MCP',
+        requiresRestart: true,
+        default: undefined as string | undefined,
+        description: 'Command to start an MCP server.',
+        showInDialog: false,
+      },
+      allowed: {
+        type: 'array',
+        label: 'Allow MCP Servers',
+        category: 'MCP',
+        requiresRestart: true,
+        default: undefined as string[] | undefined,
+        description: 'A list of MCP servers to allow.',
+        showInDialog: false,
+      },
+      excluded: {
+        type: 'array',
+        label: 'Exclude MCP Servers',
+        category: 'MCP',
+        requiresRestart: true,
+        default: undefined as string[] | undefined,
+        description: 'A list of MCP servers to exclude.',
+        showInDialog: false,
+      },
+    },
+  },
+
+  // Advanced settings section with new merge strategies
+  advanced: {
+    type: 'object',
+    label: 'Advanced',
     category: 'Advanced',
     requiresRestart: false,
-    default: undefined as BugCommandSettings | undefined,
-    description: 'Configuration for the bug report command.',
+    default: {},
+    description: 'Advanced settings.',
     showInDialog: false,
+    properties: {
+      autoConfigureMemory: {
+        type: 'boolean',
+        label: 'Auto Configure Max Old Space Size',
+        category: 'Advanced',
+        requiresRestart: true,
+        default: false,
+        description: 'Automatically configure Node.js memory limits',
+        showInDialog: false,
+      },
+      dnsResolutionOrder: {
+        type: 'string',
+        label: 'DNS Resolution Order',
+        category: 'Advanced',
+        requiresRestart: true,
+        default: undefined as DnsResolutionOrder | undefined,
+        description: 'The DNS resolution order.',
+        showInDialog: false,
+      },
+      excludedEnvVars: {
+        type: 'array',
+        label: 'Excluded Project Environment Variables',
+        category: 'Advanced',
+        requiresRestart: false,
+        default: ['DEBUG', 'DEBUG_MODE'] as string[],
+        description: 'Environment variables to exclude from project context.',
+        showInDialog: false,
+        mergeStrategy: MergeStrategy.UNION,
+      },
+      bugCommand: {
+        type: 'object',
+        label: 'Bug Command',
+        category: 'Advanced',
+        requiresRestart: false,
+        default: undefined as BugCommandSettings | undefined,
+        description: 'Configuration for the bug report command.',
+        showInDialog: false,
+      },
+    },
   },
   summarizeToolOutput: {
     type: 'object',
@@ -620,6 +977,7 @@ export const SETTINGS_SCHEMA = {
         default: [] as string[],
         description: 'List of disabled extensions.',
         showInDialog: false,
+        mergeStrategy: MergeStrategy.UNION,
       },
       workspacesWithMigrationNudge: {
         type: 'array',
@@ -630,6 +988,7 @@ export const SETTINGS_SCHEMA = {
         description:
           'List of workspaces for which the migration nudge has been shown.',
         showInDialog: false,
+        mergeStrategy: MergeStrategy.UNION,
       },
     },
   },
