@@ -5,9 +5,11 @@
  */
 
 import { getCliVersion } from '../../utils/version.js';
-import { CommandKind, SlashCommand } from './types.js';
+import type { CommandContext, SlashCommand } from './types.js';
+import { CommandKind } from './types.js';
 import process from 'node:process';
 import { MessageType, type HistoryItemAbout } from '../types.js';
+import { IdeClient } from '@vybestack/llxprt-code-core';
 
 export const aboutCommand: SlashCommand = {
   name: 'about',
@@ -52,12 +54,9 @@ export const aboutCommand: SlashCommand = {
 
     const cliVersion = await getCliVersion();
     const selectedAuthType =
-      context.services.settings.merged.selectedAuthType || '';
-    const gcpProject = process.env.GOOGLE_CLOUD_PROJECT || '';
-    const ideClient =
-      (context.services.config?.getIdeMode() &&
-        context.services.config?.getIdeClient()?.getDetectedIdeDisplayName()) ||
-      '';
+      context.services.settings.merged.security?.auth?.selectedType || '';
+    const gcpProject = process.env['GOOGLE_CLOUD_PROJECT'] || '';
+    const ideClient = await getIdeClientName(context);
 
     // Determine keyfile path and key status for the active provider (if any)
     let keyfilePath = '';
@@ -93,3 +92,11 @@ export const aboutCommand: SlashCommand = {
     context.ui.addItem(aboutItem, Date.now());
   },
 };
+
+async function getIdeClientName(context: CommandContext) {
+  if (!context.services.config?.getIdeMode()) {
+    return '';
+  }
+  const ideClient = await IdeClient.getInstance();
+  return ideClient?.getDetectedIdeDisplayName() ?? '';
+}

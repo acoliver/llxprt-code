@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2025 Vybestack LLC
+ * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,60 +10,44 @@ import { type CommandContext } from './types.js';
 import { createMockCommandContext } from '../../test-utils/mockCommandContext.js';
 import * as versionUtils from '../../utils/version.js';
 import { MessageType } from '../types.js';
-import { MockFileSystem } from '../../providers/IFileSystem.js';
-import {
-  setFileSystem,
-  resetProviderManager,
-} from '../../providers/providerManagerInstance.js';
-import { USER_SETTINGS_PATH } from '../../config/settings.js';
+import { IdeClient } from '@google/gemini-cli-core';
 
-import { IdeClient } from '../../../../core/src/ide/ide-client.js';
+vi.mock('@google/gemini-cli-core', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@google/gemini-cli-core')>();
+  return {
+    ...actual,
+    IdeClient: {
+      getInstance: vi.fn().mockResolvedValue({
+        getDetectedIdeDisplayName: vi.fn().mockReturnValue('test-ide'),
+      }),
+    },
+  };
+});
 
 vi.mock('../../utils/version.js', () => ({
   getCliVersion: vi.fn(),
 }));
 
-vi.mock('../../providers/providerManagerInstance.js', async () => {
-  const actual = await vi.importActual(
-    '../../providers/providerManagerInstance.js',
-  );
-  return {
-    ...actual,
-    getProviderManager: vi.fn(() => {
-      throw new Error('Provider manager not available in test');
-    }),
-  };
-});
-
 describe('aboutCommand', () => {
   let mockContext: CommandContext;
-  let mockFileSystem: MockFileSystem;
   const originalPlatform = process.platform;
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    // Reset provider manager and set up mock file system
-    resetProviderManager();
-    mockFileSystem = new MockFileSystem();
-    setFileSystem(mockFileSystem);
-
-    // Set up mock settings file with controlled content
-    mockFileSystem.setMockFile(
-      USER_SETTINGS_PATH,
-      JSON.stringify({
-        selectedAuthType: 'test-auth',
-      }),
-    );
     mockContext = createMockCommandContext({
       services: {
         config: {
           getModel: vi.fn(),
-          getIdeClient: vi.fn(),
           getIdeMode: vi.fn().mockReturnValue(true),
         },
         settings: {
           merged: {
-            selectedAuthType: 'test-auth',
+            security: {
+              auth: {
+                selectedType: 'test-auth',
+              },
+            },
           },
         },
       },
@@ -76,13 +60,10 @@ describe('aboutCommand', () => {
     vi.spyOn(mockContext.services.config!, 'getModel').mockReturnValue(
       'test-model',
     );
-    process.env.GOOGLE_CLOUD_PROJECT = 'test-gcp-project';
+    process.env['GOOGLE_CLOUD_PROJECT'] = 'test-gcp-project';
     Object.defineProperty(process, 'platform', {
       value: 'test-os',
     });
-    vi.spyOn(mockContext.services.config!, 'getIdeClient').mockReturnValue({
-      getDetectedIdeDisplayName: vi.fn().mockReturnValue('test-ide'),
-    } as Partial<IdeClient> as IdeClient);
   });
 
   afterEach(() => {
@@ -92,7 +73,6 @@ describe('aboutCommand', () => {
     });
     process.env = originalEnv;
     vi.clearAllMocks();
-    resetProviderManager();
   });
 
   it('should have the correct name and description', () => {
@@ -101,7 +81,7 @@ describe('aboutCommand', () => {
   });
 
   it('should call addItem with all version info', async () => {
-    process.env.SANDBOX = '';
+    process.env['SANDBOX'] = '';
     if (!aboutCommand.action) {
       throw new Error('The about command must have an action.');
     }
@@ -117,8 +97,6 @@ describe('aboutCommand', () => {
         modelVersion: 'test-model',
         selectedAuthType: 'test-auth',
         gcpProject: 'test-gcp-project',
-        keyfile: '',
-        key: '',
         ideClient: 'test-ide',
       },
       expect.any(Number),
@@ -126,7 +104,7 @@ describe('aboutCommand', () => {
   });
 
   it('should show the correct sandbox environment variable', async () => {
-    process.env.SANDBOX = 'gemini-sandbox';
+    process.env['SANDBOX'] = 'gemini-sandbox';
     if (!aboutCommand.action) {
       throw new Error('The about command must have an action.');
     }
@@ -142,8 +120,8 @@ describe('aboutCommand', () => {
   });
 
   it('should show sandbox-exec profile when applicable', async () => {
-    process.env.SANDBOX = 'sandbox-exec';
-    process.env.SEATBELT_PROFILE = 'test-profile';
+    process.env['SANDBOX'] = 'sandbox-exec';
+    process.env['SEATBELT_PROFILE'] = 'test-profile';
     if (!aboutCommand.action) {
       throw new Error('The about command must have an action.');
     }
@@ -159,11 +137,11 @@ describe('aboutCommand', () => {
   });
 
   it('should not show ide client when it is not detected', async () => {
-    vi.spyOn(mockContext.services.config!, 'getIdeClient').mockReturnValue({
+    vi.mocked(IdeClient.getInstance).mockResolvedValue({
       getDetectedIdeDisplayName: vi.fn().mockReturnValue(undefined),
-    } as Partial<IdeClient> as IdeClient);
+    } as unknown as IdeClient);
 
-    process.env.SANDBOX = '';
+    process.env['SANDBOX'] = '';
     if (!aboutCommand.action) {
       throw new Error('The about command must have an action.');
     }

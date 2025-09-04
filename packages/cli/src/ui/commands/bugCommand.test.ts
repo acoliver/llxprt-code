@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2025 Vybestack LLC
+ * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,13 +12,28 @@ import { getCliVersion } from '../../utils/version.js';
 import { GIT_COMMIT_INFO } from '../../generated/git-commit.js';
 import { formatMemoryUsage } from '../utils/formatters.js';
 
+// Mock dependencies
 vi.mock('open');
 vi.mock('../../utils/version.js');
 vi.mock('../utils/formatters.js');
+vi.mock('@google/gemini-cli-core', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@google/gemini-cli-core')>();
+  return {
+    ...actual,
+    IdeClient: {
+      getInstance: () => ({
+        getDetectedIdeDisplayName: vi.fn().mockReturnValue('VSCode'),
+      }),
+    },
+    sessionId: 'test-session-id',
+  };
+});
 vi.mock('node:process', () => ({
   default: {
     platform: 'test-platform',
     version: 'v20.0.0',
+    // Keep other necessary process properties if needed by other parts of the code
     env: process.env,
     memoryUsage: () => ({ rss: 0 }),
   },
@@ -42,9 +57,6 @@ describe('bugCommand', () => {
         config: {
           getModel: () => 'gemini-pro',
           getBugCommand: () => undefined,
-          getIdeClient: () => ({
-            getDetectedIdeDisplayName: () => 'VSCode',
-          }),
           getIdeMode: () => true,
         },
       },
@@ -56,6 +68,7 @@ describe('bugCommand', () => {
     const expectedInfo = `
 * **CLI Version:** 0.1.0
 * **Git Commit:** ${GIT_COMMIT_INFO}
+* **Session ID:** test-session-id
 * **Operating System:** test-platform v20.0.0
 * **Sandbox Environment:** test
 * **Model Version:** gemini-pro
@@ -63,7 +76,7 @@ describe('bugCommand', () => {
 * **IDE Client:** VSCode
 `;
     const expectedUrl =
-      'https://github.com/acoliver/llxprt-code/issues/new?template=bug_report.yml&title=A%20test%20bug&info=' +
+      'https://github.com/google-gemini/gemini-cli/issues/new?template=bug_report.yml&title=A%20test%20bug&info=' +
       encodeURIComponent(expectedInfo);
 
     expect(open).toHaveBeenCalledWith(expectedUrl);
@@ -77,19 +90,18 @@ describe('bugCommand', () => {
         config: {
           getModel: () => 'gemini-pro',
           getBugCommand: () => ({ urlTemplate: customTemplate }),
-          getIdeClient: () => ({
-            getDetectedIdeDisplayName: () => 'VSCode',
-          }),
           getIdeMode: () => true,
         },
       },
     });
+
     if (!bugCommand.action) throw new Error('Action is not defined');
     await bugCommand.action(mockContext, 'A custom bug');
 
     const expectedInfo = `
 * **CLI Version:** 0.1.0
 * **Git Commit:** ${GIT_COMMIT_INFO}
+* **Session ID:** test-session-id
 * **Operating System:** test-platform v20.0.0
 * **Sandbox Environment:** test
 * **Model Version:** gemini-pro

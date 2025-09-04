@@ -327,7 +327,7 @@ export class Config {
   private readonly noBrowser: boolean;
   private readonly folderTrust: boolean;
   private ideMode: boolean;
-  private ideClient!: IdeClient;
+
   private inFallbackMode = false;
   private _modelSwitchedDuringSession: boolean = false;
   private readonly maxSessionTurns: number;
@@ -489,7 +489,12 @@ export class Config {
       throw Error('Config was already initialized');
     }
     this.initialized = true;
-    this.ideClient = await IdeClient.getInstance();
+
+    if (this.getIdeMode()) {
+      await (await IdeClient.getInstance()).connect();
+      logIdeConnection(this, new IdeConnectionEvent(IdeConnectionType.START));
+    }
+
     // Initialize centralized FileDiscoveryService
     this.getFileService();
     if (this.getCheckpointingEnabled()) {
@@ -1027,14 +1032,6 @@ export class Config {
     this.ideMode = value;
   }
 
-  setIdeClientDisconnected(): void {
-    this.ideClient?.disconnect();
-  }
-
-  setIdeClientConnected(): void {
-    this.ideClient?.connect();
-  }
-
   getComplexityAnalyzerSettings(): ComplexityAnalyzerSettings {
     return this.complexityAnalyzerSettings;
   }
@@ -1064,7 +1061,6 @@ export class Config {
   isInteractive(): boolean {
     return this.interactive;
   }
-
   /**
    * Get the current FileSystemService
    */

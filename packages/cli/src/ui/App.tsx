@@ -34,6 +34,7 @@ import { useLoadingIndicator } from './hooks/useLoadingIndicator.js';
 import { useThemeCommand } from './hooks/useThemeCommand.js';
 import { useAuthCommand } from './hooks/useAuthCommand.js';
 import { useFolderTrust } from './hooks/useFolderTrust.js';
+import { useIdeTrustListener } from './hooks/useIdeTrustListener.js';
 import { useEditorSettings } from './hooks/useEditorSettings.js';
 import { useSlashCommandProcessor } from './hooks/slashCommandProcessor.js';
 import { useAutoAcceptIndicator } from './hooks/useAutoAcceptIndicator.js';
@@ -64,6 +65,9 @@ import { HistoryItemDisplay } from './components/HistoryItemDisplay.js';
 import { ContextSummaryDisplay } from './components/ContextSummaryDisplay.js';
 import { useHistory } from './hooks/useHistoryManager.js';
 import process from 'node:process';
+import type {
+  DetectedIde,
+} from '@vybestack/llxprt-code-core';
 import {
   getErrorMessage,
   type Config,
@@ -78,6 +82,7 @@ import {
   ideContext,
   type IModel,
   getSettingsService,
+  IdeClient,
 } from '@vybestack/llxprt-code-core';
 import {
   IdeIntegrationNudge,
@@ -217,13 +222,20 @@ const App = (props: AppInternalProps) => {
   const { updateTodos } = useTodoContext();
 
   const [idePromptAnswered, setIdePromptAnswered] = useState(false);
-  const currentIDE = config.getIdeClient()?.getCurrentIde();
+  const [currentIDE, setCurrentIDE] = useState<DetectedIde | undefined>();
+  const [showIdeRestartPrompt, setShowIdeRestartPrompt] = useState(false);
+
   useEffect(() => {
-    const ideClient = config.getIdeClient();
-    if (ideClient) {
-      registerCleanup(() => ideClient.disconnect());
-    }
+    (async () => {
+      const ideClient = await IdeClient.getInstance();
+      setCurrentIDE(ideClient.getCurrentIde());
+    })();
+    registerCleanup(async () => {
+      const ideClient = await IdeClient.getInstance();
+      ideClient.disconnect();
+    });
   }, [config]);
+
   const shouldShowIdePrompt =
     currentIDE &&
     !config.getIdeMode() &&
@@ -455,7 +467,24 @@ const App = (props: AppInternalProps) => {
     useSettingsCommand();
 
   const { isFolderTrustDialogOpen, handleFolderTrustSelect, isRestarting } =
-    useFolderTrust(settings, config);
+    useFolderTrust(settings, _setIsTrustedFolder);
+
+  const { needsRestart: ideNeedsRestart } = useIdeTrustListener();
+  useEffect(() => {
+    if (ideNeedsRestart) {
+      // IDE trust changed, force a restart.
+      setShowIdeRestartPrompt(true);
+    }
+  }, [ideNeedsRestart]);
+
+  useKeypress(
+    (key) => {
+      if (key.name === 'r' || key.name === 'R') {
+        process.exit(0);
+      }
+    },
+    { isActive: showIdeRestartPrompt },
+  );
 
   const {
     isAuthDialogOpen,

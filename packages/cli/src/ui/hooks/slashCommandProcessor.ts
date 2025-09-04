@@ -1,38 +1,39 @@
 /**
  * @license
- * Copyright 2025 Vybestack LLC
+ * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { useCallback, useMemo, useEffect, useState } from 'react';
 import { type PartListUnion } from '@google/genai';
 import process from 'node:process';
-import { UseHistoryManagerReturn } from './useHistoryManager.js';
+import type { UseHistoryManagerReturn } from './useHistoryManager.js';
+import type { Config } from '@google/gemini-cli-core';
 import {
-  Config,
   GitService,
   Logger,
   logSlashCommand,
-  SlashCommandEvent,
+  makeSlashCommandEvent,
+  SlashCommandStatus,
   ToolConfirmationOutcome,
   Storage,
-} from '@vybestack/llxprt-code-core';
+  IdeClient,
+} from '@google/gemini-cli-core';
 import { useSessionStats } from '../contexts/SessionContext.js';
-import {
+import { runExitCleanup } from '../../utils/cleanup.js';
+import type {
   Message,
-  MessageType,
   HistoryItemWithoutId,
   HistoryItem,
   SlashCommandProcessorResult,
 } from '../types.js';
-import { LoadedSettings } from '../../config/settings.js';
+import { MessageType } from '../types.js';
+import type { LoadedSettings } from '../../config/settings.js';
 import { type CommandContext, type SlashCommand } from '../commands/types.js';
 import { CommandService } from '../../services/CommandService.js';
 import { BuiltinCommandLoader } from '../../services/BuiltinCommandLoader.js';
 import { FileCommandLoader } from '../../services/FileCommandLoader.js';
 import { McpPromptLoader } from '../../services/McpPromptLoader.js';
-import { secureInputHandler } from '../utils/secureInputHandler.js';
-import { runExitCleanup } from '../../utils/cleanup.js';
 
 /**
  * Hook to define and process slash commands (e.g., /help, /clear).
@@ -44,22 +45,17 @@ export const useSlashCommandProcessor = (
   clearItems: UseHistoryManagerReturn['clearItems'],
   loadHistory: UseHistoryManagerReturn['loadHistory'],
   refreshStatic: () => void,
-  setShowHelp: React.Dispatch<React.SetStateAction<boolean>>,
   onDebugMessage: (message: string) => void,
   openThemeDialog: () => void,
   openAuthDialog: () => void,
   openEditorDialog: () => void,
-  openProviderDialog: () => void,
-  openProviderModelDialog: () => void,
-  openLoadProfileDialog: () => void,
-  openToolsDialog: (action: 'enable' | 'disable') => void,
   toggleCorgiMode: () => void,
   setQuittingMessages: (message: HistoryItem[]) => void,
   openPrivacyNotice: () => void,
   openSettingsDialog: () => void,
   toggleVimEnabled: () => Promise<boolean>,
   setIsProcessing: (isProcessing: boolean) => void,
-  setLlxprtMdFileCount: (count: number) => void,
+  setGeminiMdFileCount: (count: number) => void,
 ) => {
   const session = useSessionStats();
   const [commands, setCommands] = useState<readonly SlashCommand[]>([]);
@@ -125,8 +121,6 @@ export const useSlashCommandProcessor = (
           modelVersion: message.modelVersion,
           selectedAuthType: message.selectedAuthType,
           gcpProject: message.gcpProject,
-          keyfile: message.keyfile,
-          key: message.key,
           ideClient: message.ideClient,
         };
       } else if (message.type === MessageType.HELP) {
@@ -167,7 +161,6 @@ export const useSlashCommandProcessor = (
     },
     [addItem],
   );
-
   const commandContext = useMemo(
     (): CommandContext => ({
       services: {
@@ -189,8 +182,7 @@ export const useSlashCommandProcessor = (
         setPendingItem: setPendingCompressionItem,
         toggleCorgiMode,
         toggleVimEnabled,
-        setLlxprtMdFileCount,
-        updateHistoryTokenCount: session.updateHistoryTokenCount,
+        setGeminiMdFileCount,
         reloadCommands,
       },
       session: {
@@ -206,7 +198,6 @@ export const useSlashCommandProcessor = (
       loadHistory,
       addItem,
       clearItems,
-      session.updateHistoryTokenCount,
       refreshStatic,
       session.stats,
       onDebugMessage,
@@ -215,7 +206,7 @@ export const useSlashCommandProcessor = (
       toggleCorgiMode,
       toggleVimEnabled,
       sessionShellAllowlist,
-      setLlxprtMdFileCount,
+      setGeminiMdFileCount,
       reloadCommands,
     ],
   );
@@ -225,19 +216,20 @@ export const useSlashCommandProcessor = (
       return;
     }
 
-    const ideClient = config.getIdeClient();
-    if (!ideClient) {
-      return;
-    }
-
     const listener = () => {
       reloadCommands();
     };
 
-    ideClient.addStatusChangeListener(listener);
+    (async () => {
+      const ideClient = await IdeClient.getInstance();
+      ideClient.addStatusChangeListener(listener);
+    })();
 
     return () => {
-      ideClient.removeStatusChangeListener(listener);
+      (async () => {
+        const ideClient = await IdeClient.getInstance();
+        ideClient.removeStatusChangeListener(listener);
+      })();
     };
   }, [config, reloadCommands]);
 
@@ -253,10 +245,7 @@ export const useSlashCommandProcessor = (
         loaders,
         controller.signal,
       );
-      // Only update commands if not aborted
-      if (!controller.signal.aborted) {
-        setCommands(commandService.getCommands());
-      }
+      setCommands(commandService.getCommands());
     };
 
     load();
@@ -272,83 +261,71 @@ export const useSlashCommandProcessor = (
       oneTimeShellAllowlist?: Set<string>,
       overwriteConfirmed?: boolean,
     ): Promise<SlashCommandProcessorResult | false> => {
+      if (typeof rawQuery !== 'string') {
+        return false;
+      }
+
+      const trimmed = rawQuery.trim();
+      if (!trimmed.startsWith('/') && !trimmed.startsWith('?')) {
+        return false;
+      }
+
       setIsProcessing(true);
-      try {
-        if (typeof rawQuery !== 'string') {
-          return false;
+
+      const userMessageTimestamp = Date.now();
+      addItem({ type: MessageType.USER, text: trimmed }, userMessageTimestamp);
+
+      const parts = trimmed.substring(1).trim().split(/\s+/);
+      const commandPath = parts.filter((p) => p); // The parts of the command, e.g., ['memory', 'add']
+
+      let currentCommands = commands;
+      let commandToExecute: SlashCommand | undefined;
+      let pathIndex = 0;
+      let hasError = false;
+      const canonicalPath: string[] = [];
+
+      for (const part of commandPath) {
+        // TODO: For better performance and architectural clarity, this two-pass
+        // search could be replaced. A more optimal approach would be to
+        // pre-compute a single lookup map in `CommandService.ts` that resolves
+        // all name and alias conflicts during the initial loading phase. The
+        // processor would then perform a single, fast lookup on that map.
+
+        // First pass: check for an exact match on the primary command name.
+        let foundCommand = currentCommands.find((cmd) => cmd.name === part);
+
+        // Second pass: if no primary name matches, check for an alias.
+        if (!foundCommand) {
+          foundCommand = currentCommands.find((cmd) =>
+            cmd.altNames?.includes(part),
+          );
         }
 
-        const trimmed = rawQuery.trim();
-        if (!trimmed.startsWith('/') && !trimmed.startsWith('?')) {
-          return false;
-        }
-
-        const userMessageTimestamp = Date.now();
-
-        // Sanitize the command if it contains sensitive data
-        const sanitizedCommand = trimmed.startsWith('/key ')
-          ? secureInputHandler.sanitizeForHistory(trimmed)
-          : trimmed;
-
-        addItem(
-          { type: MessageType.USER, text: sanitizedCommand },
-          userMessageTimestamp,
-        );
-
-        const parts = trimmed.substring(1).trim().split(/\s+/);
-        const commandPath = parts.filter((p) => p); // The parts of the command, e.g., ['memory', 'add']
-
-        let currentCommands = commands;
-        let commandToExecute: SlashCommand | undefined;
-        let pathIndex = 0;
-        const canonicalPath: string[] = [];
-
-        for (const part of commandPath) {
-          // TODO: For better performance and architectural clarity, this two-pass
-          // search could be replaced. A more optimal approach would be to
-          // pre-compute a single lookup map in `CommandService.ts` that resolves
-          // all name and alias conflicts during the initial loading phase. The
-          // processor would then perform a single, fast lookup on that map.
-
-          // First pass: check for an exact match on the primary command name.
-          let foundCommand = currentCommands.find((cmd) => cmd.name === part);
-
-          // Second pass: if no primary name matches, check for an alias.
-          if (!foundCommand) {
-            foundCommand = currentCommands.find((cmd) =>
-              cmd.altNames?.includes(part),
-            );
-          }
-
-          if (foundCommand) {
-            commandToExecute = foundCommand;
-            canonicalPath.push(foundCommand.name);
-            pathIndex++;
-            if (foundCommand.subCommands) {
-              currentCommands = foundCommand.subCommands;
-            } else {
-              break;
-            }
+        if (foundCommand) {
+          commandToExecute = foundCommand;
+          canonicalPath.push(foundCommand.name);
+          pathIndex++;
+          if (foundCommand.subCommands) {
+            currentCommands = foundCommand.subCommands;
           } else {
             break;
           }
+        } else {
+          break;
         }
+      }
 
+      const resolvedCommandPath = canonicalPath;
+      const subcommand =
+        resolvedCommandPath.length > 1
+          ? resolvedCommandPath.slice(1).join(' ')
+          : undefined;
+
+      try {
         if (commandToExecute) {
           const args = parts.slice(pathIndex).join(' ');
 
           if (commandToExecute.action) {
-            if (config) {
-              const resolvedCommandPath = canonicalPath;
-              const event = new SlashCommandEvent(
-                resolvedCommandPath[0],
-                resolvedCommandPath.length > 1
-                  ? resolvedCommandPath.slice(1).join(' ')
-                  : undefined,
-              );
-              logSlashCommand(config, event);
-            }
-
             const fullCommandContext: CommandContext = {
               ...commandContext,
               invocation: {
@@ -370,7 +347,6 @@ export const useSlashCommandProcessor = (
                 ]),
               };
             }
-
             const result = await commandToExecute.action(
               fullCommandContext,
               args,
@@ -398,9 +374,6 @@ export const useSlashCommandProcessor = (
                   return { type: 'handled' };
                 case 'dialog':
                   switch (result.dialog) {
-                    case 'help':
-                      setShowHelp(true);
-                      return { type: 'handled' };
                     case 'auth':
                       openAuthDialog();
                       return { type: 'handled' };
@@ -413,38 +386,10 @@ export const useSlashCommandProcessor = (
                     case 'privacy':
                       openPrivacyNotice();
                       return { type: 'handled' };
-                    case 'provider':
-                      openProviderDialog();
-                      return { type: 'handled' };
-                    case 'providerModel':
-                      openProviderModelDialog();
-                      return { type: 'handled' };
-                    case 'loadProfile':
-                      openLoadProfileDialog();
-                      return { type: 'handled' };
-                    case 'tools': {
-                      // Extract the subcommand from the original command
-                      const originalCommand = rawQuery.trim();
-                      const commandParts = originalCommand.split(/\s+/);
-                      const subCommand = commandParts[1] as
-                        | 'enable'
-                        | 'disable';
-                      openToolsDialog(subCommand);
-                      return { type: 'handled' };
-                    }
-                    case 'logging': {
-                      // For now, show the log entries as text since dialog system is not fully implemented
-                      const dialogData = result.dialogData as {
-                        entries?: unknown[];
-                      };
-                      if (dialogData && dialogData.entries) {
-                        // This would open the LoggingDialog when the dialog system is ready
-                        // For now, the command handles displaying the logs
-                      }
-                      return { type: 'handled' };
-                    }
                     case 'settings':
                       openSettingsDialog();
+                      return { type: 'handled' };
+                    case 'help':
                       return { type: 'handled' };
                     default: {
                       const unhandled: never = result.dialog;
@@ -454,24 +399,19 @@ export const useSlashCommandProcessor = (
                     }
                   }
                 case 'load_history': {
-                  // Always load the UI history first
+                  config
+                    ?.getGeminiClient()
+                    ?.setHistory(result.clientHistory, { stripThoughts: true });
                   fullCommandContext.ui.clear();
                   result.history.forEach((item, index) => {
                     fullCommandContext.ui.addItem(item, index);
                   });
-
-                  // Set the client history - it will be stored for later use if not initialized
-                  const client = config?.getGeminiClient();
-                  if (client) {
-                    await client.setHistory(result.clientHistory);
-                  }
-
                   return { type: 'handled' };
                 }
                 case 'quit':
                   setQuittingMessages(result.messages);
-                  setTimeout(() => {
-                    runExitCleanup();
+                  setTimeout(async () => {
+                    await runExitCleanup();
                     process.exit(0);
                   }, 100);
                   return { type: 'handled' };
@@ -579,8 +519,18 @@ export const useSlashCommandProcessor = (
           content: `Unknown command: ${trimmed}`,
           timestamp: new Date(),
         });
+
         return { type: 'handled' };
-      } catch (e) {
+      } catch (e: unknown) {
+        hasError = true;
+        if (config) {
+          const event = makeSlashCommandEvent({
+            command: resolvedCommandPath[0],
+            subcommand,
+            status: SlashCommandStatus.ERROR,
+          });
+          logSlashCommand(config, event);
+        }
         addItem(
           {
             type: MessageType.ERROR,
@@ -590,13 +540,20 @@ export const useSlashCommandProcessor = (
         );
         return { type: 'handled' };
       } finally {
+        if (config && resolvedCommandPath[0] && !hasError) {
+          const event = makeSlashCommandEvent({
+            command: resolvedCommandPath[0],
+            subcommand,
+            status: SlashCommandStatus.SUCCESS,
+          });
+          logSlashCommand(config, event);
+        }
         setIsProcessing(false);
       }
     },
     [
       config,
       addItem,
-      setShowHelp,
       openAuthDialog,
       commands,
       commandContext,
@@ -604,10 +561,6 @@ export const useSlashCommandProcessor = (
       openThemeDialog,
       openPrivacyNotice,
       openEditorDialog,
-      openProviderDialog,
-      openProviderModelDialog,
-      openLoadProfileDialog,
-      openToolsDialog,
       setQuittingMessages,
       openSettingsDialog,
       setShellConfirmationRequest,

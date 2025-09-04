@@ -1,61 +1,52 @@
 /**
  * @license
- * Copyright 2025 Vybestack LLC
+ * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { ErrorInfo } from 'react';
-import { render } from 'ink';
+import React, { useState, useEffect } from 'react';
+import { render, Box, Text } from 'ink';
+import Spinner from 'ink-spinner';
 import { AppWrapper } from './ui/App.js';
-import { ErrorBoundary } from './ui/components/ErrorBoundary.js';
 import { loadCliConfig, parseArguments } from './config/config.js';
 import { readStdin } from './utils/readStdin.js';
 import { basename } from 'node:path';
 import v8 from 'node:v8';
-import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import dns from 'node:dns';
 import { spawn } from 'node:child_process';
 import { start_sandbox } from './utils/sandbox.js';
-import chalk from 'chalk';
-import {
-  DnsResolutionOrder,
-  LoadedSettings,
-  loadSettings,
-  SettingScope,
-} from './config/settings.js';
-import {
-  getSettingsService,
-  Config,
-  sessionId,
-  AuthType,
-  getOauthClient,
-  setGitStatsService,
-  FatalConfigError,
-  // IDE connection logging removed - telemetry disabled in llxprt
-} from '@vybestack/llxprt-code-core';
+import type { DnsResolutionOrder, LoadedSettings } from './config/settings.js';
+import { loadSettings, SettingScope } from './config/settings.js';
 import { themeManager } from './ui/themes/theme-manager.js';
 import { getStartupWarnings } from './utils/startupWarnings.js';
 import { getUserStartupWarnings } from './utils/userStartupWarnings.js';
 import { ConsolePatcher } from './ui/utils/ConsolePatcher.js';
 import { runNonInteractive } from './nonInteractiveCli.js';
 import { loadExtensions } from './config/extension.js';
-import { cleanupCheckpoints, registerCleanup } from './utils/cleanup.js';
+import {
+  cleanupCheckpoints,
+  registerCleanup,
+  runExitCleanup,
+} from './utils/cleanup.js';
 import { getCliVersion } from './utils/version.js';
+import type { Config } from '@google/gemini-cli-core';
+import {
+  sessionId,
+  logUserPrompt,
+  AuthType,
+  getOauthClient,
+  uiTelemetryService,
+} from '@google/gemini-cli-core';
 import { validateAuthMethod } from './config/auth.js';
 import { setMaxSizedBoxDebugging } from './ui/components/shared/MaxSizedBox.js';
-import { getProviderManager } from './providers/providerManagerInstance.js';
-import {
-  setProviderApiKey,
-  setProviderBaseUrl,
-} from './providers/providerConfigUtils.js';
 import { validateNonInteractiveAuth } from './validateNonInterActiveAuth.js';
 import { detectAndEnableKittyProtocol } from './ui/utils/kittyProtocolDetector.js';
 import { checkForUpdates } from './ui/utils/updateCheck.js';
 import { handleAutoUpdate } from './utils/handleAutoUpdate.js';
-import { GitStatsServiceImpl } from './providers/logging/git-stats-service-impl.js';
 import { appEvents, AppEvent } from './utils/events.js';
 import { SettingsContext } from './ui/contexts/SettingsContext.js';
+import { writeFileSync } from 'node:fs';
 
 export function validateDnsResolutionOrder(
   order: string | undefined,
@@ -89,7 +80,7 @@ function getNodeMemoryArgs(config: Config): string[] {
     );
   }
 
-  if (process.env.LLXPRT_CLI_NO_RELAUNCH) {
+  if (process.env['GEMINI_CLI_NO_RELAUNCH']) {
     return [];
   }
 
@@ -107,7 +98,7 @@ function getNodeMemoryArgs(config: Config): string[] {
 
 async function relaunchWithAdditionalArgs(additionalArgs: string[]) {
   const nodeArgs = [...additionalArgs, ...process.argv.slice(1)];
-  const newEnv = { ...process.env, LLXPRT_CLI_NO_RELAUNCH: 'true' };
+  const newEnv = { ...process.env, GEMINI_CLI_NO_RELAUNCH: 'true' };
 
   const child = spawn(process.execPath, nodeArgs, {
     stdio: 'inherit',
@@ -117,10 +108,40 @@ async function relaunchWithAdditionalArgs(additionalArgs: string[]) {
   await new Promise((resolve) => child.on('close', resolve));
   process.exit(0);
 }
+
+const InitializingComponent = ({ initialTotal }: { initialTotal: number }) => {
+  const [total, setTotal] = useState(initialTotal);
+  const [connected, setConnected] = useState(0);
+
+  useEffect(() => {
+    const onStart = ({ count }: { count: number }) => setTotal(count);
+    const onChange = () => {
+      setConnected((val) => val + 1);
+    };
+
+    appEvents.on('mcp-servers-discovery-start', onStart);
+    appEvents.on('mcp-server-connected', onChange);
+    appEvents.on('mcp-server-error', onChange);
+
+    return () => {
+      appEvents.off('mcp-servers-discovery-start', onStart);
+      appEvents.off('mcp-server-connected', onChange);
+      appEvents.off('mcp-server-error', onChange);
+    };
+  }, []);
+
+  const message = `Connecting to MCP servers... (${connected}/${total})`;
+
+  return (
+    <Box>
+      <Text>
+        <Spinner /> {message}
+      </Text>
+    </Box>
+  );
+};
+
 import { runZedIntegration } from './zed-integration/zedIntegration.js';
-import { existsSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
 
 export function setupUnhandledRejectionHandler() {
   let unhandledRejectionOccurred = false;
@@ -144,61 +165,28 @@ ${reason.stack}`
   });
 }
 
-function handleError(error: Error, errorInfo: ErrorInfo) {
-  // Log to console for debugging
-  console.error('Application Error:', error);
-  console.error('Component Stack:', errorInfo.componentStack);
-
-  // Special handling for maximum update depth errors
-  if (error.message.includes('Maximum update depth exceeded')) {
-    console.error('\nCRITICAL: RENDER LOOP DETECTED!');
-    console.error('This is likely caused by:');
-    console.error('- State updates during render');
-    console.error('- Incorrect useEffect dependencies');
-    console.error('- Non-memoized props causing re-renders');
-    console.error('\nCheck recent changes to React components and hooks.');
-  }
-}
-
 export async function startInteractiveUI(
   config: Config,
   settings: LoadedSettings,
   startupWarnings: string[],
-  workspaceRoot: string,
+  workspaceRoot: string = process.cwd(),
 ) {
   const version = await getCliVersion();
   // Detect and enable Kitty keyboard protocol once at startup
   await detectAndEnableKittyProtocol();
   setWindowTitle(basename(workspaceRoot), settings);
-
-  // Initialize authentication before rendering to ensure geminiClient is available
-  if (settings.merged.selectedAuthType) {
-    try {
-      const err = validateAuthMethod(settings.merged.selectedAuthType);
-      if (err) {
-        console.error('Error validating authentication method:', err);
-        process.exit(1);
-      }
-    } catch (err) {
-      console.error('Error authenticating:', err);
-      process.exit(1);
-    }
-  }
-
   const instance = render(
     <React.StrictMode>
-      <ErrorBoundary onError={handleError}>
-        <SettingsContext.Provider value={settings}>
-          <AppWrapper
-            config={config}
-            settings={settings}
-            startupWarnings={startupWarnings}
-            version={version}
-          />
-        </SettingsContext.Provider>
-      </ErrorBoundary>
+      <SettingsContext.Provider value={settings}>
+        <AppWrapper
+          config={config}
+          settings={settings}
+          startupWarnings={startupWarnings}
+          version={version}
+        />
+      </SettingsContext.Provider>
     </React.StrictMode>,
-    { exitOnCtrlC: false },
+    { exitOnCtrlC: false, isScreenReaderEnabled: config.getScreenReader() },
   );
 
   checkForUpdates()
@@ -217,40 +205,28 @@ export async function startInteractiveUI(
 
 export async function main() {
   setupUnhandledRejectionHandler();
-
-  // Create .llxprt directory if it doesn't exist
-  const llxprtDir = join(homedir(), '.llxprt');
-  if (!existsSync(llxprtDir)) {
-    mkdirSync(llxprtDir, { recursive: true });
-  }
-  const workspaceRoot = process.cwd();
-  const settings = loadSettings(workspaceRoot);
-  const argv = await parseArguments(settings.merged);
+  const settings = loadSettings();
 
   await cleanupCheckpoints();
-  if (settings.errors.length > 0) {
-    const errorMessages = settings.errors.map(
-      (error) => `Error in ${error.path}: ${error.message}`,
-    );
-    throw new FatalConfigError(
-      `${errorMessages.join('\n')}\nPlease fix the configuration file(s) and try again.`,
-    );
-  }
 
-  // If we're in ACP mode, redirect console output IMMEDIATELY
-  // before any config loading that might write to stdout
-  if (argv.experimentalAcp) {
-    console.log = console.error;
-    console.info = console.error;
-    console.debug = console.error;
-  }
-  const extensions = loadExtensions(workspaceRoot);
+  const argv = await parseArguments(settings.merged);
+  const extensions = loadExtensions();
   const config = await loadCliConfig(
     settings.merged,
     extensions,
     sessionId,
     argv,
   );
+
+  if (argv.sessionSummary) {
+    registerCleanup(() => {
+      const metrics = uiTelemetryService.getMetrics();
+      writeFileSync(
+        argv.sessionSummary!,
+        JSON.stringify({ sessionMetrics: metrics }, null, 2),
+      );
+    });
+  }
 
   const consolePatcher = new ConsolePatcher({
     stderr: true,
@@ -259,28 +235,8 @@ export async function main() {
   consolePatcher.patch();
   registerCleanup(consolePatcher.cleanup);
 
-  const providerManager = getProviderManager(config, false, settings);
-  config.setProviderManager(providerManager);
-
-  // Initialize git stats service for tracking file changes when logging is enabled
-  if (config.getConversationLoggingEnabled()) {
-    const gitStatsService = new GitStatsServiceImpl(config);
-    setGitStatsService(gitStatsService);
-  }
-
-  // Ensure serverToolsProvider (Gemini) has config set if it's not the active provider
-  const serverToolsProvider = providerManager.getServerToolsProvider();
-  if (
-    serverToolsProvider &&
-    serverToolsProvider.name === 'gemini' &&
-    serverToolsProvider.setConfig
-  ) {
-    serverToolsProvider.setConfig(config);
-  }
-
-  // Set DNS resolution order (prefer IPv4 by default)
   dns.setDefaultResultOrder(
-    validateDnsResolutionOrder(settings.merged.dnsResolutionOrder),
+    validateDnsResolutionOrder(settings.merged.advanced?.dnsResolutionOrder),
   );
 
   if (argv.promptInteractive && !process.stdin.isTTY) {
@@ -291,337 +247,76 @@ export async function main() {
   }
 
   if (config.getListExtensions()) {
-    for (const _extension of extensions) {
-      // List extensions without console.log
+    console.log('Installed extensions:');
+    for (const extension of extensions) {
+      console.log(`- ${extension.config.name}`);
     }
     process.exit(0);
   }
 
   // Set a default auth type if one isn't set.
-  if (!settings.merged.selectedAuthType) {
-    if (process.env.CLOUD_SHELL === 'true') {
+  if (!settings.merged.security?.auth?.selectedType) {
+    if (process.env['CLOUD_SHELL'] === 'true') {
       settings.setValue(
         SettingScope.User,
         'selectedAuthType',
         AuthType.CLOUD_SHELL,
       );
-    } else if (process.env.LLXPRT_AUTH_TYPE === 'none') {
-      settings.setValue(
-        SettingScope.User,
-        'selectedAuthType',
-        AuthType.USE_NONE,
-      );
     }
-  }
-  // Empty key causes issues with the GoogleGenAI package.
-  if (process.env['GEMINI_API_KEY']?.trim() === '') {
-    delete process.env['GEMINI_API_KEY'];
-  }
-
-  if (process.env['GOOGLE_API_KEY']?.trim() === '') {
-    delete process.env['GOOGLE_API_KEY'];
   }
 
   setMaxSizedBoxDebugging(config.getDebugMode());
 
+  const mcpServers = config.getMcpServers();
+  const mcpServersCount = mcpServers ? Object.keys(mcpServers).length : 0;
+
+  let spinnerInstance;
+  if (config.isInteractive() && mcpServersCount > 0) {
+    spinnerInstance = render(
+      <InitializingComponent initialTotal={mcpServersCount} />,
+    );
+  }
+
   await config.initialize();
 
-  if (config.getIdeMode()) {
-    const ideClient = config.getIdeClient();
-    if (ideClient) {
-      await ideClient.connect();
-      // IDE connection logging removed - telemetry disabled in llxprt
-    }
+  if (spinnerInstance) {
+    // Small UX detail to show the completion message for a bit before unmounting.
+    await new Promise((f) => setTimeout(f, 100));
+    spinnerInstance.clear();
+    spinnerInstance.unmount();
   }
 
   // Load custom themes from settings
-  themeManager.loadCustomThemes(settings.merged.customThemes);
+  themeManager.loadCustomThemes(settings.merged.ui?.customThemes);
 
-  // If a provider is specified, activate it after initialization
-  const configProvider = config.getProvider();
-  if (configProvider) {
-    try {
-      await providerManager.setActiveProvider(configProvider);
-
-      // Set the model after activating provider
-      // If no model specified, use the provider's default
-      const activeProvider = providerManager.getActiveProvider();
-      let configModel = config.getModel();
-
-      if (
-        (!configModel || configModel === 'placeholder-model') &&
-        activeProvider.getDefaultModel
-      ) {
-        // No model specified or placeholder, get the provider's default
-        configModel = activeProvider.getDefaultModel();
-      }
-
-      if (configModel && activeProvider.setModel) {
-        activeProvider.setModel(configModel);
-        // Also update the config with the resolved model
-        const settingsService = getSettingsService();
-        settingsService.setProviderSetting(
-          configProvider,
-          'model',
-          configModel,
-        );
-      }
-
-      // Apply profile model params if loaded AND provider was NOT specified via CLI
-      const configWithProfile = config as Config & {
-        _profileModelParams?: Record<string, unknown>;
-      };
-      if (
-        !argv.provider &&
-        configWithProfile._profileModelParams &&
-        activeProvider
-      ) {
-        if (
-          'setModelParams' in activeProvider &&
-          activeProvider.setModelParams
-        ) {
-          activeProvider.setModelParams(configWithProfile._profileModelParams);
-        }
-      }
-
-      // Apply ephemeral settings from profile ONLY if provider was NOT specified via CLI
-      if (!argv.provider) {
-        const authKey = config.getEphemeralSetting('auth-key') as string;
-        const authKeyfile = config.getEphemeralSetting(
-          'auth-keyfile',
-        ) as string;
-        const baseUrl = config.getEphemeralSetting('base-url') as string;
-
-        // Only apply profile auth settings if no CLI auth args were provided
-        if (!argv.key && !argv.keyfile) {
-          if (authKey && activeProvider.setApiKey) {
-            activeProvider.setApiKey(authKey);
-          } else if (authKeyfile && activeProvider.setApiKey) {
-            // Load API key from file
-            try {
-              const apiKey = (
-                await fs.readFile(
-                  authKeyfile.replace(/^~/, os.homedir()),
-                  'utf-8',
-                )
-              ).trim();
-              if (apiKey) {
-                activeProvider.setApiKey(apiKey);
-              }
-            } catch (error) {
-              console.error(
-                chalk.red(
-                  `Failed to load keyfile ${authKeyfile}: ${error instanceof Error ? error.message : String(error)}`,
-                ),
-              );
-            }
-          }
-        }
-
-        // Only apply profile base URL if not overridden by CLI
-        if (
-          !argv.baseurl &&
-          baseUrl &&
-          baseUrl !== 'none' &&
-          activeProvider.setBaseUrl
-        ) {
-          activeProvider.setBaseUrl(baseUrl);
-        }
-      }
-
-      // No need to set auth type when using a provider
-    } catch (e) {
-      console.error(chalk.red((e as Error).message));
-      process.exit(1);
-    }
-  }
-
-  // Apply ephemeral settings from profile if provider came from profile (not CLI)
-  // This handles the case where profile was loaded via --profile-load
-  if (!argv.provider && (argv.profileLoad || settings.merged.defaultProfile)) {
-    const activeProvider = providerManager.getActiveProvider();
-    if (activeProvider) {
-      // Apply ephemeral settings from profile to the provider
-      // BUT only if not overridden by CLI arguments
-      const authKey = config.getEphemeralSetting('auth-key') as string;
-      const authKeyfile = config.getEphemeralSetting('auth-keyfile') as string;
-      const baseUrl = config.getEphemeralSetting('base-url') as string;
-
-      // Only apply profile auth settings if no CLI auth args were provided
-      if (!argv.key && !argv.keyfile) {
-        if (authKey && activeProvider.setApiKey) {
-          activeProvider.setApiKey(authKey);
-        } else if (authKeyfile && activeProvider.setApiKey) {
-          // Load API key from file
-          try {
-            const apiKey = (
-              await fs.readFile(
-                authKeyfile.replace(/^~/, os.homedir()),
-                'utf-8',
-              )
-            ).trim();
-            if (apiKey) {
-              activeProvider.setApiKey(apiKey);
-            }
-          } catch (error) {
-            console.error(
-              chalk.red(
-                `Failed to load keyfile ${authKeyfile}: ${error instanceof Error ? error.message : String(error)}`,
-              ),
-            );
-          }
-        }
-      }
-
-      // Only apply profile base URL if not overridden by CLI
-      if (
-        !argv.baseurl &&
-        baseUrl &&
-        baseUrl !== 'none' &&
-        activeProvider.setBaseUrl
-      ) {
-        activeProvider.setBaseUrl(baseUrl);
-      }
-
-      // Apply profile model params if loaded
-      const configWithProfile = config as Config & {
-        _profileModelParams?: Record<string, unknown>;
-      };
-      if (
-        configWithProfile._profileModelParams &&
-        'setModelParams' in activeProvider &&
-        activeProvider.setModelParams
-      ) {
-        activeProvider.setModelParams(configWithProfile._profileModelParams);
-      }
-    }
-  }
-
-  // Process CLI-provided credentials (--key, --keyfile, --baseurl)
-  if (argv.key || argv.keyfile || argv.baseurl) {
-    // Provider-specific credentials are now handled directly
-
-    // Handle --key
-    if (argv.key) {
-      const result = await setProviderApiKey(
-        providerManager,
-        settings,
-        argv.key,
-        config,
-      );
-      if (!result.success) {
-        console.error(chalk.red(result.message));
-        process.exit(1);
-      }
-      if (config.getDebugMode()) {
-        console.debug(result.message);
-      }
-    }
-
-    // Handle --keyfile
-    if (argv.keyfile) {
-      try {
-        // Read the API key from file
-        const resolvedPath = argv.keyfile.replace(/^~/, os.homedir());
-        const apiKey = await fs.readFile(resolvedPath, 'utf-8');
-        const trimmedKey = apiKey.trim();
-
-        if (!trimmedKey) {
-          console.error(chalk.red('The specified file is empty'));
-          process.exit(1);
-        }
-
-        const result = await setProviderApiKey(
-          providerManager,
-          settings,
-          trimmedKey,
-          config,
-        );
-
-        if (!result.success) {
-          console.error(chalk.red(result.message));
-          process.exit(1);
-        }
-
-        // Store the keyfile path in ephemeral settings for reference
-        // This helps track that we're using a keyfile vs direct key
-        config.setEphemeralSetting('auth-keyfile', resolvedPath);
-        // Don't clear auth-key - setProviderApiKey already sets it in settings
-        // The auth-key will be used immediately, and auth-keyfile is stored
-        // for future reference (e.g., when reloading profiles)
-
-        const message = `API key loaded from ${resolvedPath} for provider '${providerManager.getActiveProviderName()}'`;
-        if (config.getDebugMode()) {
-          console.debug(message);
-        }
-      } catch (error) {
-        console.error(
-          chalk.red(
-            `Failed to process keyfile: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-        );
-        process.exit(1);
-      }
-    }
-
-    // Handle --baseurl
-    if (argv.baseurl) {
-      const result = await setProviderBaseUrl(
-        providerManager,
-        settings,
-        argv.baseurl,
-      );
-      if (!result.success) {
-        console.error(chalk.red(result.message));
-        process.exit(1);
-      }
-      if (config.getDebugMode()) {
-        console.debug(result.message);
-      }
-    }
-  }
-
-  if (settings.merged.theme) {
-    if (!themeManager.setActiveTheme(settings.merged.theme)) {
+  if (settings.merged.ui?.theme) {
+    if (!themeManager.setActiveTheme(settings.merged.ui?.theme)) {
       // If the theme is not found during initial load, log a warning and continue.
       // The useThemeCommand hook in App.tsx will handle opening the dialog.
-      console.warn(`Warning: Theme "${settings.merged.theme}" not found.`);
+      console.warn(`Warning: Theme "${settings.merged.ui?.theme}" not found.`);
     }
-  }
-
-  // Verify theme colors at startup for debugging
-  if (process.env.DEBUG_THEME) {
-    const activeTheme = themeManager.getActiveTheme();
-    console.log('Active theme:', activeTheme.name);
-    console.log('Theme colors:', {
-      AccentCyan: activeTheme.colors.AccentCyan,
-      AccentBlue: activeTheme.colors.AccentBlue,
-      AccentGreen: activeTheme.colors.AccentGreen,
-      Gray: activeTheme.colors.Gray,
-    });
   }
 
   // hop into sandbox if we are outside and sandboxing is enabled
-  if (!process.env.SANDBOX) {
-    const memoryArgs = settings.merged.autoConfigureMaxOldSpaceSize
+  if (!process.env['SANDBOX']) {
+    const memoryArgs = settings.merged.advanced?.autoConfigureMemory
       ? getNodeMemoryArgs(config)
       : [];
     const sandboxConfig = config.getSandbox();
     if (sandboxConfig) {
       if (
-        settings.merged.selectedAuthType &&
-        !settings.merged.useExternalAuth
+        settings.merged.security?.auth?.selectedType &&
+        !settings.merged.security?.auth?.useExternal
       ) {
         // Validate authentication here because the sandbox will interfere with the Oauth2 web redirect.
         try {
-          const err = validateAuthMethod(settings.merged.selectedAuthType);
+          const err = validateAuthMethod(
+            settings.merged.security.auth.selectedType,
+          );
           if (err) {
             throw new Error(err);
           }
-          await config.refreshAuth(settings.merged.selectedAuthType);
-
-          // Compression settings are already applied via ephemeral settings in Config
-          // and will be read directly by geminiChat.ts during compression
+          await config.refreshAuth(settings.merged.security.auth.selectedType);
         } catch (err) {
           console.error('Error authenticating:', err);
           process.exit(1);
@@ -670,47 +365,27 @@ export async function main() {
   }
 
   if (
-    settings.merged.selectedAuthType === AuthType.LOGIN_WITH_GOOGLE &&
+    settings.merged.security?.auth?.selectedType ===
+      AuthType.LOGIN_WITH_GOOGLE &&
     config.isBrowserLaunchSuppressed()
   ) {
     // Do oauth before app renders to make copying the link possible.
-    await getOauthClient(settings.merged.selectedAuthType, config);
+    await getOauthClient(settings.merged.security.auth.selectedType, config);
   }
 
   if (config.getExperimentalZedIntegration()) {
-    // In ACP mode, authentication happens through the protocol
-    // Just ensure the provider manager is set up if configured
-    const providerManager = config.getProviderManager();
-    const configProvider = config.getProvider();
-
-    if (configProvider && providerManager) {
-      try {
-        // Set the active provider if not already set
-        if (!providerManager.hasActiveProvider()) {
-          await providerManager.setActiveProvider(configProvider);
-        }
-      } catch (_e) {
-        // Non-fatal - continue without provider
-        // Authentication can still happen via the ACP protocol
-      }
-    }
-
-    await runZedIntegration(config, settings);
-    return;
+    return runZedIntegration(config, settings, extensions, argv);
   }
 
   let input = config.getQuestion();
   const startupWarnings = [
     ...(await getStartupWarnings()),
-    ...(await getUserStartupWarnings(workspaceRoot)),
+    ...(await getUserStartupWarnings()),
   ];
-
-  // Check if a provider is already active on startup
-  providerManager.getActiveProvider();
 
   // Render UI, passing necessary config values. Check that there is no command line question.
   if (config.isInteractive()) {
-    await startInteractiveUI(config, settings, startupWarnings, workspaceRoot);
+    await startInteractiveUI(config, settings, startupWarnings);
     return;
   }
   // If not a TTY, read from stdin
@@ -729,20 +404,37 @@ export async function main() {
   }
 
   const prompt_id = Math.random().toString(16).slice(2);
+  logUserPrompt(config, {
+    'event.name': 'user_prompt',
+    'event.timestamp': new Date().toISOString(),
+    prompt: input,
+    prompt_id,
+    auth_type: config.getContentGeneratorConfig()?.authType,
+    prompt_length: input.length,
+  });
 
   const nonInteractiveConfig = await validateNonInteractiveAuth(
-    settings.merged.selectedAuthType,
-    settings.merged.useExternalAuth,
+    settings.merged.security?.auth?.selectedType,
+    settings.merged.security?.auth?.useExternal,
     config,
+    settings,
   );
 
+  if (config.getDebugMode()) {
+    console.log('Session ID: %s', sessionId);
+  }
+
   await runNonInteractive(nonInteractiveConfig, input, prompt_id);
+  // Call cleanup before process.exit, which causes cleanup to not run
+  await runExitCleanup();
   process.exit(0);
 }
 
 function setWindowTitle(title: string, settings: LoadedSettings) {
-  if (!settings.merged.hideWindowTitle) {
-    const windowTitle = (process.env.CLI_TITLE || `LLxprt - ${title}`).replace(
+  if (!settings.merged.ui?.hideWindowTitle) {
+    const windowTitle = (
+      process.env['CLI_TITLE'] || `Gemini - ${title}`
+    ).replace(
       // eslint-disable-next-line no-control-regex
       /[\x00-\x1F\x7F]/g,
       '',
