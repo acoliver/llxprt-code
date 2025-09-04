@@ -11,9 +11,16 @@ describe('SettingsSchema', () => {
   describe('SETTINGS_SCHEMA', () => {
     it('should contain all expected top-level settings', () => {
       const expectedSettings = [
+        // UI settings
         'theme',
         'customThemes',
+        'hideWindowTitle',
+        'hideTips',
+        'hideBanner',
+        'hideFooter',
         'showMemoryUsage',
+        
+        // General settings
         'usageStatisticsEnabled',
         'autoConfigureMaxOldSpaceSize',
         'preferredEditor',
@@ -23,17 +30,23 @@ describe('SettingsSchema', () => {
         'contextFileName',
         'vimMode',
         'ideMode',
-        'accessibility',
-        'checkpointing',
+        'emojifilter',
+        
+        // File filtering
         'fileFiltering',
+        
+        // Updates
         'disableAutoUpdate',
-        'hideWindowTitle',
-        'hideTips',
-        'hideBanner',
+        
+        // Shell
+        'shouldUseNodePtyShell',
+        
+        // Advanced settings
         'selectedAuthType',
         'useExternalAuth',
         'sandbox',
         'coreTools',
+        'allowedTools',
         'excludeTools',
         'toolDiscoveryCommand',
         'toolCallCommand',
@@ -42,17 +55,50 @@ describe('SettingsSchema', () => {
         'allowMCPServers',
         'excludeMCPServers',
         'telemetry',
-        'bugCommand',
+        
+        // Nested object settings
+        'accessibility',
+        'checkpointing',
+        'model',
+        'context',
+        'tools',
+        'mcp',
+        'advanced',
+        
+        // Compatibility settings (flat)
         'summarizeToolOutput',
         'dnsResolutionOrder',
         'excludedProjectEnvVars',
         'disableUpdateNag',
         'includeDirectories',
         'loadMemoryFromIncludeDirectories',
-        'model',
         'hasSeenIdeIntegrationNudge',
+        'folderTrust',
+        'chatCompression',
+        'showLineNumbers',
         'useRipgrep',
         'debugKeystrokeLogging',
+        
+        // LLxprt-specific provider settings
+        'defaultProfile',
+        'providerApiKeys',
+        'providerBaseUrls',
+        'providerToolFormatOverrides',
+        'providerKeyfiles',
+        'oauthEnabledProviders',
+        
+        // Feature flags
+        'extensionManagement',
+        'extensions',
+        
+        // Tool settings
+        'enableTextToolCallParsing',
+        'textToolCallModels',
+        
+        // API settings
+        'openaiResponsesEnabled',
+        'shellReplacement',
+        'enablePromptCompletion',
       ];
 
       expectedSettings.forEach((setting) => {

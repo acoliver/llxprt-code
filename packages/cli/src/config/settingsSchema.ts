@@ -858,15 +858,6 @@ export const SETTINGS_SCHEMA = {
     description: 'Whether to load memory files from include directories.',
     showInDialog: true,
   },
-  model: {
-    type: 'string',
-    label: 'Model',
-    category: 'General',
-    requiresRestart: false,
-    default: undefined as string | undefined,
-    description: 'The model to use for conversations.',
-    showInDialog: false,
-  },
   hasSeenIdeIntegrationNudge: {
     type: 'boolean',
     label: 'Has Seen IDE Integration Nudge',

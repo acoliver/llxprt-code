@@ -12,6 +12,7 @@ import {
   LLXPRT_CONFIG_DIR as LLXPRT_DIR,
   getErrorMessage,
   Storage,
+  FatalConfigError,
 } from '@vybestack/llxprt-code-core';
 import stripJsonComments from 'strip-json-comments';
 import { DefaultLight } from '../ui/themes/default-light.js';
@@ -50,7 +51,7 @@ export const USER_SETTINGS_PATH = Storage.getGlobalSettingsPath();
 export const USER_SETTINGS_DIR = path.dirname(USER_SETTINGS_PATH);
 export const DEFAULT_EXCLUDED_ENV_VARS = ['DEBUG', 'DEBUG_MODE'];
 
-const MIGRATE_V2_OVERWRITE = false;
+const _MIGRATE_V2_OVERWRITE = false;
 
 // As defined in spec.md
 const MIGRATION_MAP: Record<string, string> = {
@@ -219,7 +220,7 @@ export function needsMigration(settings: Record<string, unknown>): boolean {
   return hasV1Keys;
 }
 
-function migrateSettingsToV2(
+function _migrateSettingsToV2(
   flatSettings: Record<string, unknown>,
 ): Record<string, unknown> | null {
   if (!needsMigration(flatSettings)) {
@@ -654,7 +655,10 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
   try {
     if (fs.existsSync(systemSettingsPath)) {
       const systemContent = fs.readFileSync(systemSettingsPath, 'utf-8');
-      systemSettings = JSON.parse(stripJsonComments(systemContent)) as Settings;
+      const rawSystemSettings = JSON.parse(stripJsonComments(systemContent)) as Record<string, unknown>;
+      systemSettings = (needsMigration(rawSystemSettings) ? 
+        _migrateSettingsToV2(rawSystemSettings) ?? rawSystemSettings : 
+        rawSystemSettings) as Settings;
     }
   } catch (error: unknown) {
     settingsErrors.push({
@@ -670,10 +674,13 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
         systemDefaultsPath,
         'utf-8',
       );
-      const parsedSystemDefaults = JSON.parse(
+      const rawSystemDefaults = JSON.parse(
         stripJsonComments(systemDefaultsContent),
-      ) as Settings;
-      systemDefaultSettings = resolveEnvVarsInObject(parsedSystemDefaults);
+      ) as Record<string, unknown>;
+      const migratedSystemDefaults = (needsMigration(rawSystemDefaults) ? 
+        _migrateSettingsToV2(rawSystemDefaults) ?? rawSystemDefaults : 
+        rawSystemDefaults) as Settings;
+      systemDefaultSettings = resolveEnvVarsInObject(migratedSystemDefaults);
     }
   } catch (error: unknown) {
     settingsErrors.push({
@@ -686,7 +693,10 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
   try {
     if (fs.existsSync(USER_SETTINGS_PATH)) {
       const userContent = fs.readFileSync(USER_SETTINGS_PATH, 'utf-8');
-      userSettings = JSON.parse(stripJsonComments(userContent)) as Settings;
+      const rawUserSettings = JSON.parse(stripJsonComments(userContent)) as Record<string, unknown>;
+      userSettings = (needsMigration(rawUserSettings) ? 
+        _migrateSettingsToV2(rawUserSettings) ?? rawUserSettings : 
+        rawUserSettings) as Settings;
       // Support legacy theme names
       if (userSettings.theme && userSettings.theme === 'VS') {
         userSettings.theme = DefaultLight.name;
@@ -706,9 +716,12 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
     try {
       if (fs.existsSync(workspaceSettingsPath)) {
         const projectContent = fs.readFileSync(workspaceSettingsPath, 'utf-8');
-        workspaceSettings = JSON.parse(
+        const rawWorkspaceSettings = JSON.parse(
           stripJsonComments(projectContent),
-        ) as Settings;
+        ) as Record<string, unknown>;
+        workspaceSettings = (needsMigration(rawWorkspaceSettings) ? 
+          _migrateSettingsToV2(rawWorkspaceSettings) ?? rawWorkspaceSettings : 
+          rawWorkspaceSettings) as Settings;
         if (workspaceSettings.theme && workspaceSettings.theme === 'VS') {
           workspaceSettings.theme = DefaultLight.name;
         } else if (
@@ -799,6 +812,14 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
       `Invalid value for chatCompression.contextPercentageThreshold: "${threshold}". Please use a value between 0 and 1. Using default compression settings.`,
     );
     delete loadedSettings.merged.chatCompression;
+  }
+
+  // Throw FatalConfigError if there were any parsing errors
+  if (settingsErrors.length > 0) {
+    const errorMessages = settingsErrors.map(error => `Error in ${error.path}: ${error.message}`).join('\n');
+    throw new FatalConfigError(
+      `Configuration file errors detected:\n${errorMessages}\nPlease fix the configuration file(s) and try again.`
+    );
   }
 
   return loadedSettings;
