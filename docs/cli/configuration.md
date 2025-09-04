@@ -83,7 +83,7 @@ In addition to a project settings file, a project's `.llxprt` directory can cont
 
 If you are experiencing performance issues with file searching (e.g., with `@` completions), especially in projects with a very large number of files, here are a few things you can try in order of recommendation:
 
-1.  **Use `.geminiignore`:** Create a `.geminiignore` file in your project root to exclude directories that contain a large number of files that you don't need to reference (e.g., build artifacts, logs, `node_modules`). Reducing the total number of files crawled is the most effective way to improve performance.
+1.  **Use `.llxprtignore`:** Create a `.llxprtignore` file in your project root to exclude directories that contain a large number of files that you don't need to reference (e.g., build artifacts, logs, `node_modules`). Reducing the total number of files crawled is the most effective way to improve performance.
 
 2.  **Disable Fuzzy Search:** If ignoring files is not enough, you can disable fuzzy search by setting `disableFuzzySearch` to `true` in your `settings.json` file. This will use a simpler, non-fuzzy matching algorithm, which can be faster.
 
@@ -91,7 +91,7 @@ If you are experiencing performance issues with file searching (e.g., with `@` c
 
 - **`coreTools`** (array of strings):
   - **Description:** Allows you to specify a list of core tool names that should be made available to the model. This can be used to restrict the set of built-in tools. See [Built-in Tools](../core/tools-api.md#built-in-tools) for a list of core tools. You can also specify command-specific restrictions for tools that support it, like the `ShellTool`. For example, `"coreTools": ["ShellTool(ls -l)"]` will only allow the `ls -l` command to be executed.
-  - **Default:** All tools available for use by the Gemini model.
+  - **Default:** All tools available for use by the model.
   - **Example:** `"coreTools": ["ReadFileTool", "GlobTool", "ShellTool(ls)"]`.
 
 - **`allowedTools`** (array of strings):
@@ -109,7 +109,7 @@ If you are experiencing performance issues with file searching (e.g., with `@` c
 
 - **`allowMCPServers`** (array of strings):
   - **Description:** Allows you to specify a list of MCP server names that should be made available to the model. This can be used to restrict the set of MCP servers to connect to. Note that this will be ignored if `--allowed-mcp-server-names` is set.
-  - **Default:** All MCP servers are available for use by the Gemini model.
+  - **Default:** All MCP servers are available for use by the model.
   - **Example:** `"allowMCPServers": ["myPythonServer"]`.
   - **Security Note:** This uses simple string matching on MCP server names, which can be modified. If you're a system administrator looking to prevent users from bypassing this, consider configuring the `mcpServers` at the system settings level such that the user will not be able to configure any MCP servers of their own. This should not be used as an airtight security mechanism.
 
@@ -150,106 +150,232 @@ If you are experiencing performance issues with file searching (e.g., with `@` c
   - **Default:** Empty
   - **Example:** `"toolDiscoveryCommand": "bin/get_tools"`
 
-- **`toolCallCommand`** (string):
-  - **Description:** Defines a custom shell command for calling a specific tool that was discovered using `toolDiscoveryCommand`. The shell command must meet the following criteria:
+#### `ui`
+
+- **`ui.theme`** (string):
+  - **Description:** The color theme for the UI. See [Themes](./themes.md) for available options.
+  - **Default:** `undefined`
+
+- **`ui.customThemes`** (object):
+  - **Description:** Custom theme definitions.
+  - **Default:** `{}`
+
+- **`ui.hideWindowTitle`** (boolean):
+  - **Description:** Hide the window title bar.
+  - **Default:** `false`
+
+- **`ui.hideTips`** (boolean):
+  - **Description:** Hide helpful tips in the UI.
+  - **Default:** `false`
+
+- **`ui.hideBanner`** (boolean):
+  - **Description:** Hide the application banner.
+  - **Default:** `false`
+
+- **`ui.hideFooter`** (boolean):
+  - **Description:** Hide the footer from the UI.
+  - **Default:** `false`
+
+- **`ui.showMemoryUsage`** (boolean):
+  - **Description:** Display memory usage information in the UI.
+  - **Default:** `false`
+
+- **`ui.showLineNumbers`** (boolean):
+  - **Description:** Show line numbers in the chat.
+  - **Default:** `false`
+
+- **`ui.showCitations`** (boolean):
+  - **Description:** Show citations for generated text in the chat.
+  - **Default:** `false`
+
+- **`ui.accessibility.disableLoadingPhrases`** (boolean):
+  - **Description:** Disable loading phrases for accessibility.
+  - **Default:** `false`
+
+#### `ide`
+
+- **`ide.enabled`** (boolean):
+  - **Description:** Enable IDE integration mode.
+  - **Default:** `false`
+
+- **`ide.hasSeenNudge`** (boolean):
+  - **Description:** Whether the user has seen the IDE integration nudge.
+  - **Default:** `false`
+
+#### `privacy`
+
+- **`privacy.usageStatisticsEnabled`** (boolean):
+  - **Description:** Enable collection of usage statistics.
+  - **Default:** `true`
+
+#### `model`
+
+- **`model.name`** (string):
+  - **Description:** The model to use for conversations.
+  - **Default:** `undefined`
+
+- **`model.maxSessionTurns`** (number):
+  - **Description:** Maximum number of user/model/tool turns to keep in a session. -1 means unlimited.
+  - **Default:** `-1`
+
+- **`model.summarizeToolOutput`** (object):
+  - **Description:** Enables or disables the summarization of tool output. You can specify the token budget for the summarization using the `tokenBudget` setting. Note: Currently only the `run_shell_command` tool is supported. For example `{"run_shell_command": {"tokenBudget": 2000}}`
+  - **Default:** `undefined`
+
+- **`model.chatCompression.contextPercentageThreshold`** (number):
+  - **Description:** Sets the threshold for chat history compression as a percentage of the model's total token limit. This is a value between 0 and 1 that applies to both automatic compression and the manual `/compress` command. For example, a value of `0.6` will trigger compression when the chat history exceeds 60% of the token limit.
+  - **Default:** `0.7`
+
+- **`model.skipNextSpeakerCheck`** (boolean):
+  - **Description:** Skip the next speaker check.
+  - **Default:** `false`
+
+#### `context`
+
+- **`context.fileName`** (string or array of strings):
+  - **Description:** The name of the context file(s).
+  - **Default:** `undefined`
+
+- **`context.importFormat`** (string):
+  - **Description:** The format to use when importing memory.
+  - **Default:** `undefined`
+
+- **`context.discoveryMaxDirs`** (number):
+  - **Description:** Maximum number of directories to search for memory.
+  - **Default:** `200`
+
+- **`context.includeDirectories`** (array):
+  - **Description:** Additional directories to include in the workspace context. Missing directories will be skipped with a warning.
+  - **Default:** `[]`
+
+- **`context.loadFromIncludeDirectories`** (boolean):
+  - **Description:** Controls the behavior of the `/memory refresh` command. If set to `true`, `LLXPRT.md` files should be loaded from all directories that are added. If set to `false`, `LLXPRT.md` should only be loaded from the current directory.
+  - **Default:** `false`
+
+- **`context.fileFiltering.respectGitIgnore`** (boolean):
+  - **Description:** Respect .gitignore files when searching.
+  - **Default:** `true`
+
+- **`context.fileFiltering.respectLlxprtIgnore`** (boolean):
+  - **Description:** Respect .llxprtignore files when searching.
+  - **Default:** `true`
+
+- **`context.fileFiltering.enableRecursiveFileSearch`** (boolean):
+  - **Description:** Whether to enable searching recursively for filenames under the current tree when completing `@` prefixes in the prompt.
+  - **Default:** `true`
+
+#### `tools`
+
+- **`tools.sandbox`** (boolean or string):
+  - **Description:** Sandbox execution environment (can be a boolean or a path string).
+  - **Default:** `undefined`
+
+- **`tools.usePty`** (boolean):
+  - **Description:** Use node-pty for shell command execution. Fallback to child_process still applies.
+  - **Default:** `false`
+
+- **`tools.core`** (array of strings):
+  - **Description:** This can be used to restrict the set of built-in tools [with an allowlist](./enterprise.md#restricting-tool-access). See [Built-in Tools](../core/tools-api.md#built-in-tools) for a list of core tools. The match semantics are the same as `tools.allowed`.
+  - **Default:** `undefined`
+
+- **`tools.exclude`** (array of strings):
+  - **Description:** Tool names to exclude from discovery.
+  - **Default:** `undefined`
+
+- **`tools.allowed`** (array of strings):
+  - **Description:** A list of tool names that will bypass the confirmation dialog. This is useful for tools that you trust and use frequently. For example, `["run_shell_command(git)", "run_shell_command(npm test)"]` will skip the confirmation dialog to run any `git` and `npm test` commands. See [Shell Tool command restrictions](../tools/shell.md#command-restrictions) for details on prefix matching, command chaining, etc.
+  - **Default:** `undefined`
+
+- **`tools.discoveryCommand`** (string):
+  - **Description:** Command to run for tool discovery.
+  - **Default:** `undefined`
+
+- **`tools.callCommand`** (string):
+  - **Description:** Defines a custom shell command for calling a specific tool that was discovered using `tools.discoveryCommand`. The shell command must meet the following criteria:
     - It must take function `name` (exactly as in [function declaration](https://ai.google.dev/gemini-api/docs/function-calling#function-declarations)) as first command line argument.
     - It must read function arguments as JSON on `stdin`, analogous to [`functionCall.args`](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#functioncall).
     - It must return function output as JSON on `stdout`, analogous to [`functionResponse.response.content`](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#functionresponse).
-  - **Default:** Empty
-  - **Example:** `"toolCallCommand": "bin/call_tool"`
+  - **Default:** `undefined`
 
-- **`mcpServers`** (object):
-  - **Description:** Configures connections to one or more Model-Context Protocol (MCP) servers for discovering and using custom tools. LLxprt Code attempts to connect to each configured MCP server to discover available tools. If multiple MCP servers expose a tool with the same name, the tool names will be prefixed with the server alias you defined in the configuration (e.g., `serverAlias__actualToolName`) to avoid conflicts. Note that the system might strip certain schema properties from MCP tool definitions for compatibility. At least one of `command`, `url`, or `httpUrl` must be provided. If multiple are specified, the order of precedence is `httpUrl`, then `url`, then `command`.
-  - **Default:** Empty
-  - **Properties:**
-    - **`<SERVER_NAME>`** (object): The server parameters for the named server.
-      - `command` (string, optional): The command to execute to start the MCP server via standard I/O.
-      - `args` (array of strings, optional): Arguments to pass to the command.
-      - `env` (object, optional): Environment variables to set for the server process.
-      - `cwd` (string, optional): The working directory in which to start the server.
-      - `url` (string, optional): The URL of an MCP server that uses Server-Sent Events (SSE) for communication.
-      - `httpUrl` (string, optional): The URL of an MCP server that uses streamable HTTP for communication.
-      - `headers` (object, optional): A map of HTTP headers to send with requests to `url` or `httpUrl`.
-      - `timeout` (number, optional): Timeout in milliseconds for requests to this MCP server.
-      - `trust` (boolean, optional): Trust this server and bypass all tool call confirmations.
-      - `description` (string, optional): A brief description of the server, which may be used for display purposes.
-      - `includeTools` (array of strings, optional): List of tool names to include from this MCP server. When specified, only the tools listed here will be available from this server (whitelist behavior). If not specified, all tools from the server are enabled by default.
-      - `excludeTools` (array of strings, optional): List of tool names to exclude from this MCP server. Tools listed here will not be available to the model, even if they are exposed by the server. **Note:** `excludeTools` takes precedence over `includeTools` - if a tool is in both lists, it will be excluded.
-  - **Example:**
-    ```json
-    "mcpServers": {
-      "myPythonServer": {
-        "command": "python",
-        "args": ["mcp_server.py", "--port", "8080"],
-        "cwd": "./mcp_tools/python",
-        "timeout": 5000,
-        "includeTools": ["safe_tool", "file_reader"]
-      },
-      "myNodeServer": {
-        "command": "node",
-        "args": ["mcp_server.js"],
-        "cwd": "./mcp_tools/node",
-        "excludeTools": ["dangerous_tool", "file_deleter"]
-      },
-      "myDockerServer": {
-        "command": "docker",
-        "args": ["run", "-i", "--rm", "-e", "API_KEY", "ghcr.io/foo/bar"],
-        "env": {
-          "API_KEY": "$MY_API_TOKEN"
-        }
-      },
-      "mySseServer": {
-        "url": "http://localhost:8081/events",
-        "headers": {
-          "Authorization": "Bearer $MY_SSE_TOKEN"
-        },
-        "description": "An example SSE-based MCP server."
-      },
-      "myStreamableHttpServer": {
-        "httpUrl": "http://localhost:8082/stream",
-        "headers": {
-          "X-API-Key": "$MY_HTTP_API_KEY"
-        },
-        "description": "An example Streamable HTTP-based MCP server."
-      }
-    }
-    ```
+#### `mcp`
 
-- **`checkpointing`** (object):
-  - **Description:** Configures the checkpointing feature, which allows you to save and restore conversation and file states. See the [Checkpointing documentation](../checkpointing.md) for more details.
-  - **Default:** `{"enabled": false}`
-  - **Properties:**
-    - **`enabled`** (boolean): When `true`, the `/restore` command is available.
+- **`mcp.serverCommand`** (string):
+  - **Description:** Command to start an MCP server.
+  - **Default:** `undefined`
 
-- **`preferredEditor`** (string):
-  - **Description:** Specifies the preferred editor to use for viewing diffs.
-  - **Default:** `vscode`
-  - **Example:** `"preferredEditor": "vscode"`
+- **`mcp.allowed`** (array of strings):
+  - **Description:** An allowlist of MCP servers to allow.
+  - **Default:** `undefined`
 
-- **`telemetry`** (object)
-  - **Description:** Configures logging and metrics collection for LLxprt Code. For more information, see [Telemetry](../telemetry.md).
-  - **Default:** `{"enabled": false, "target": "local", "otlpEndpoint": "http://localhost:4317", "logPrompts": true}`
-  - **Properties:**
-    - **`enabled`** (boolean): Whether or not telemetry is enabled.
-    - **`target`** (string): The destination for collected telemetry. Supported values are `local` and `gcp`.
-    - **`otlpEndpoint`** (string): The endpoint for the OTLP Exporter.
-    - **`logPrompts`** (boolean): Whether or not to include the content of user prompts in the logs.
-  - **Example:**
-    ```json
-    "telemetry": {
-      "enabled": true,
-      "target": "local",
-      "otlpEndpoint": "http://localhost:16686",
-      "logPrompts": false
-    }
-    ```
-- **`usageStatisticsEnabled`** (boolean):
-  - **Description:** Enables or disables the collection of usage statistics. See [Usage Statistics](#usage-statistics) for more information.
-  - **Default:** `true`
-  - **Example:**
-    ```json
-    "usageStatisticsEnabled": false
-    ```
+- **`mcp.excluded`** (array of strings):
+  - **Description:** A denylist of MCP servers to exclude.
+  - **Default:** `undefined`
+
+#### `security`
+
+- **`security.folderTrust.enabled`** (boolean):
+  - **Description:** Setting to track whether Folder trust is enabled.
+  - **Default:** `false`
+
+- **`security.auth.selectedType`** (string):
+  - **Description:** The currently selected authentication type.
+  - **Default:** `undefined`
+
+- **`security.auth.enforcedType`** (string):
+  - **Description:** The required auth type (useful for enterprises).
+  - **Default:** `undefined`
+
+- **`security.auth.useExternal`** (boolean):
+  - **Description:** Whether to use an external authentication flow.
+  - **Default:** `undefined`
+
+#### `advanced`
+
+- **`advanced.autoConfigureMemory`** (boolean):
+  - **Description:** Automatically configure Node.js memory limits.
+  - **Default:** `false`
+
+- **`advanced.dnsResolutionOrder`** (string):
+  - **Description:** The DNS resolution order.
+  - **Default:** `undefined`
+
+- **`advanced.excludedEnvVars`** (array of strings):
+  - **Description:** Environment variables to exclude from project context.
+  - **Default:** `["DEBUG","DEBUG_MODE"]`
+
+- **`advanced.bugCommand`** (object):
+  - **Description:** Configuration for the bug report command.
+  - **Default:** `undefined`
+
+#### `mcpServers`
+
+Configures connections to one or more Model-Context Protocol (MCP) servers for discovering and using custom tools. LLxprt Code attempts to connect to each configured MCP server to discover available tools. If multiple MCP servers expose a tool with the same name, the tool names will be prefixed with the server alias you defined in the configuration (e.g., `serverAlias__actualToolName`) to avoid conflicts. Note that the system might strip certain schema properties from MCP tool definitions for compatibility. At least one of `command`, `url`, or `httpUrl` must be provided. If multiple are specified, the order of precedence is `httpUrl`, then `url`, then `command`.
+
+- **`mcpServers.<SERVER_NAME>`** (object): The server parameters for the named server.
+  - `command` (string, optional): The command to execute to start the MCP server via standard I/O.
+  - `args` (array of strings, optional): Arguments to pass to the command.
+  - `env` (object, optional): Environment variables to set for the server process.
+  - `cwd` (string, optional): The working directory in which to start the server.
+  - `url` (string, optional): The URL of an MCP server that uses Server-Sent Events (SSE) for communication.
+  - `httpUrl` (string, optional): The URL of an MCP server that uses streamable HTTP for communication.
+  - `headers` (object, optional): A map of HTTP headers to send with requests to `url` or `httpUrl`.
+  - `timeout` (number, optional): Timeout in milliseconds for requests to this MCP server.
+  - `trust` (boolean, optional): Trust this server and bypass all tool call confirmations.
+  - `description` (string, optional): A brief description of the server, which may be used for display purposes.
+  - `includeTools` (array of strings, optional): List of tool names to include from this MCP server. When specified, only the tools listed here will be available from this server (allowlist behavior). If not specified, all tools from the server are enabled by default.
+  - `excludeTools` (array of strings, optional): List of tool names to exclude from this MCP server. Tools listed here will not be available to the model, even if they are exposed by the server. **Note:** `excludeTools` takes precedence over `includeTools` - if a tool is in both lists, it will be excluded.
+
+#### `telemetry`
+
+Configures logging and metrics collection for LLxprt Code. For more information, see [Telemetry](../telemetry.md).
+
+- **Properties:**
+  - **`enabled`** (boolean): Whether or not telemetry is enabled.
+  - **`target`** (string): The destination for collected telemetry. Supported values are `local` and `gcp`.
+  - **`otlpEndpoint`** (string): The endpoint for the OTLP Exporter.
+  - **`otlpProtocol`** (string): The protocol for the OTLP Exporter (`grpc` or `http`).
+  - **`logPrompts`** (boolean): Whether or not to include the content of user prompts in the logs.
+  - **`outfile`** (string): The file to write telemetry to when `target` is `local`.
 
 - **`enableTextToolCallParsing`** (boolean):
   - **Description:** Enables or disables text-based tool call parsing for models that output tool calls as formatted text rather than structured JSON.
@@ -259,142 +385,7 @@ If you are experiencing performance issues with file searching (e.g., with `@` c
     "enableTextToolCallParsing": true
     ```
 
-- **`textToolCallModels`** (array of strings):
-  - **Description:** Specifies additional model names that require text-based tool call parsing. The system automatically detects common models like gemma-3-12b-it and gemma-2-27b-it, but you can add custom models here.
-  - **Default:** `[]`
-  - **Example:**
-    ```json
-    "textToolCallModels": ["my-custom-model", "local-llama-model"]
-    ```
-
-- **`hideTips`** (boolean):
-  - **Description:** Enables or disables helpful tips in the CLI interface.
-  - **Default:** `false`
-  - **Example:**
-
-    ```json
-    "hideTips": true
-    ```
-
-- **`hideBanner`** (boolean):
-  - **Description:** Enables or disables the startup banner (ASCII art logo) in the CLI interface.
-  - **Default:** `false`
-  - **Example:**
-
-    ```json
-    "hideBanner": true
-    ```
-
-- **`maxSessionTurns`** (number):
-  - **Description:** Sets the maximum number of turns for a session. If the session exceeds this limit, the CLI will stop processing and start a new chat.
-  - **Default:** `-1` (unlimited)
-  - **Example:**
-    ```json
-    "maxSessionTurns": 10
-    ```
-
-- **`summarizeToolOutput`** (object):
-  - **Description:** Enables or disables the summarization of tool output. You can specify the token budget for the summarization using the `tokenBudget` setting.
-  - Note: Currently only the `run_shell_command` tool is supported.
-  - **Default:** `{}` (Disabled by default)
-  - **Example:**
-    ```json
-    "summarizeToolOutput": {
-      "run_shell_command": {
-        "tokenBudget": 2000
-      }
-    }
-    ```
-
-- **`excludedProjectEnvVars`** (array of strings):
-  - **Description:** Specifies environment variables that should be excluded from being loaded from project `.env` files. This prevents project-specific environment variables (like `DEBUG=true`) from interfering with llxprt-code behavior. Variables from `.llxprt/.env` files are never excluded.
-  - **Default:** `["DEBUG", "DEBUG_MODE"]`
-  - **Example:**
-    ```json
-    "excludedProjectEnvVars": ["DEBUG", "DEBUG_MODE", "NODE_ENV"]
-    ```
-
-- **`includeDirectories`** (array of strings):
-  - **Description:** Specifies an array of additional absolute or relative paths to include in the workspace context. Missing directories will be skipped with a warning by default. Paths can use `~` to refer to the user's home directory. This setting can be combined with the `--include-directories` command-line flag.
-  - **Default:** `[]`
-  - **Example:**
-    ```json
-    "includeDirectories": [
-      "/path/to/another/project",
-      "../shared-library",
-      "~/common-utils"
-    ]
-    ```
-
-- **`loadMemoryFromIncludeDirectories`** (boolean):
-  - **Description:** Controls the behavior of the `/memory refresh` command. If set to `true`, `GEMINI.md` files should be loaded from all directories that are added. If set to `false`, `GEMINI.md` should only be loaded from the current directory.
-  - **Default:** `false`
-  - **Example:**
-    ```json
-    "loadMemoryFromIncludeDirectories": true
-    ```
-
-- **`chatCompression`** (object):
-  - **Description:** Controls the settings for chat history compression, both automatic and
-    when manually invoked through the /compress command.
-  - **Properties:**
-    - **`contextPercentageThreshold`** (number): A value between 0 and 1 that specifies the token threshold for compression as a percentage of the model's total token limit. For example, a value of `0.6` will trigger compression when the chat history exceeds 60% of the token limit.
-  - **Example:**
-    ```json
-    "chatCompression": {
-      "contextPercentageThreshold": 0.6
-    }
-    ```
-
-- **`showLineNumbers`** (boolean):
-  - **Description:** Controls whether line numbers are displayed in code blocks in the CLI output.
-  - **Default:** `true`
-  - **Example:**
-    ```json
-    "showLineNumbers": false
-    ```
-
-- **`emojiFilter`** (object):
-  - **Description:** Controls emoji filtering in LLM responses and file operations. See [Emoji Filter Guide](../EMOJI-FILTER.md) for detailed usage.
-  - **Default:** `{"mode": "auto"}`
-  - **Properties:**
-    - **`mode`** (string): Filtering mode - `allowed`, `auto`, `warn`, or `error`
-      - `allowed`: No filtering, emojis pass through
-      - `auto`: Silent filtering (default) - converts functional emojis to text, removes decorative ones
-      - `warn`: Filter with feedback messages
-      - `error`: Block any content with emojis
-  - **Example:**
-    ```json
-    "emojiFilter": {
-      "mode": "warn"
-    }
-    ```
-  - **Note:** Can be configured per-session using `/set emojifilter <mode>` command
-
-- **`defaultProfile`** (string):
-  - **Description:** Specifies the profile to automatically load on startup. Set via `/profile set-default` command.
-  - **Default:** `null`
-  - **Example:**
-    ```json
-    "defaultProfile": "my-development-profile"
-    ```
-  - **Note:** When set, the specified profile will be loaded automatically each time LLxprt Code starts
-
-- **`accessibility`** (object):
-  - **Description:** Configures accessibility features for the CLI.
-  - **Properties:**
-    - **`screenReader`** (boolean): Enables screen reader mode, which adjusts the TUI for better compatibility with screen readers. This can also be enabled with the `--screen-reader` command-line flag, which will take precedence over the setting.
-    - **`disableLoadingPhrases`** (boolean): Disables the display of loading phrases during operations.
-  - **Default:** `{"screenReader": false, "disableLoadingPhrases": false}`
-  - **Example:**
-    ```json
-    "accessibility": {
-      "screenReader": true,
-      "disableLoadingPhrases": true
-    }
-    ```
-
-### Example `settings.json`:
+Here is an example of a `settings.json` file with the nested structure, new as of v0.3.0:
 
 ```json
 {
@@ -662,7 +653,7 @@ Arguments passed directly when running the CLI can override other configurations
   - Example: `llxprt --experimental-acp`
   - **Note:** This is an experimental feature primarily used by the Zed editor integration.
 - **`--screen-reader`**:
-  - Enables screen reader mode for accessibility.
+  - Enables screen reader mode, which adjusts the TUI for better compatibility with screen readers.
 - **`--version`**:
   - Displays the version of the CLI.
 
