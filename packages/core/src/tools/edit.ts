@@ -16,7 +16,6 @@ import {
   ToolInvocation,
   ToolLocation,
   ToolResult,
-  ToolResultDisplay,
 } from './tools.js';
 import { ToolErrorType } from './tool-error.js';
 import { makeRelative, shortenPath } from '../utils/paths.js';
@@ -492,13 +491,35 @@ class EditToolInvocation implements ToolInvocation<EditToolParams, ToolResult> {
         }
       }
 
+      const fileName = path.basename(this.params.file_path);
+      const originallyProposedContent =
+        this.params.ai_proposed_content || editData.newContent;
+      const diffStat = getDiffStat(
+        fileName,
+        editData.currentContent ?? '',
+        originallyProposedContent,
+        editData.newContent,
+      );
+
       let displayResult: ToolResultDisplay;
       if (editData.isNewFile) {
-        displayResult = `Created ${shortenPath(makeRelative(this.params.file_path, this.config.getTargetDir()))}`;
+        // For new files, still create a display result with diff stats
+        const fileDiff = Diff.createPatch(
+          fileName,
+          '', // empty content for new file
+          editData.newContent,
+          'Current',
+          'Proposed',
+          DEFAULT_DIFF_OPTIONS,
+        );
+        displayResult = {
+          fileDiff,
+          fileName,
+          originalContent: null,
+          newContent: editData.newContent,
+          diffStat,
+        };
       } else {
-        // Generate diff for display, even though core logic doesn't technically need it
-        // The CLI wrapper will use this part of the ToolResult
-        const fileName = path.basename(this.params.file_path);
         const fileDiff = Diff.createPatch(
           fileName,
           editData.currentContent ?? '', // Should not be null here if not isNewFile
@@ -506,14 +527,6 @@ class EditToolInvocation implements ToolInvocation<EditToolParams, ToolResult> {
           'Current',
           'Proposed',
           DEFAULT_DIFF_OPTIONS,
-        );
-        const originallyProposedContent =
-          this.params.ai_proposed_string || this.params.new_string;
-        const diffStat = getDiffStat(
-          fileName,
-          editData.currentContent ?? '',
-          originallyProposedContent,
-          this.params.new_string,
         );
         displayResult = {
           fileDiff,
