@@ -612,6 +612,9 @@ export const useGeminiStream = (
           case ServerGeminiEventType.UsageMetadata:
             // Handle usage metadata - for now just ignore
             break;
+          case ServerGeminiEventType.Retry:
+            // Handle retry event to clean up response text
+            break;
           default: {
             // enforces exhaustive switch-case
             const unreachable: never = event;
