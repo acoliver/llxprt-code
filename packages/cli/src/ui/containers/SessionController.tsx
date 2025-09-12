@@ -241,6 +241,7 @@ const SessionControllerInner: React.FC<SessionControllerProps> = ({
       // Note: loadHierarchicalLlxprtMemory now requires settings, but SessionController
       // doesn't have access to settings. This needs to be refactored.
       // For now, using the internal config loading that has settings.
+      const settings = loadSettings(process.cwd()).merged;
       const { memoryContent, fileCount } = await loadHierarchicalLlxprtMemory(
         process.cwd(),
         config.shouldLoadMemoryFromIncludeDirectories()
@@ -248,8 +249,11 @@ const SessionControllerInner: React.FC<SessionControllerProps> = ({
           : [],
         config.getDebugMode(),
         config.getFileService(),
-        loadSettings(process.cwd()).merged, // Get merged settings object
+        settings, // Get merged settings object
         config.getExtensionContextFilePaths(),
+        config.getFolderTrust(),
+        settings.memoryImportFormat || 'tree',
+        config.getFileFilteringOptions(),
       );
       config.setUserMemory(memoryContent);
       config.setLlxprtMdFileCount(fileCount);

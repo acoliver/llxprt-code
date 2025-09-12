@@ -97,7 +97,11 @@ describe('loadServerHierarchicalMemory', () => {
         'Src directory memory',
       ); // Untrusted
 
-      const filepath = path.join(homedir, LLXPRT_CONFIG_DIR, DEFAULT_CONTEXT_FILENAME);
+      const filepath = path.join(
+        homedir,
+        LLXPRT_CONFIG_DIR,
+        DEFAULT_CONTEXT_FILENAME,
+      );
       await createTestFile(filepath, 'default context content'); // In user home dir (outside untrusted space).
       const { fileCount, memoryContent } = await loadServerHierarchicalMemory(
         cwd,
