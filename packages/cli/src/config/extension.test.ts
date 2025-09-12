@@ -121,17 +121,7 @@ describe('loadExtensions', () => {
     expect(extensions[0].config.name).toBe('test-extension');
   });
 
-<<<<<<< HEAD
   it('should load context file path when LLXPRT.md is present', () => {
-    const workspaceExtensionsDir = path.join(
-      tempWorkspaceDir,
-      EXTENSIONS_DIRECTORY_NAME,
-    );
-    fs.mkdirSync(workspaceExtensionsDir, { recursive: true });
-    createExtension(workspaceExtensionsDir, 'ext1', '1.0.0', true);
-    createExtension(workspaceExtensionsDir, 'ext2', '2.0.0');
-=======
-  it('should load context file path when GEMINI.md is present', () => {
     createExtension({
       extensionsDir: workspaceExtensionsDir,
       name: 'ext1',
@@ -143,7 +133,6 @@ describe('loadExtensions', () => {
       name: 'ext2',
       version: '2.0.0',
     });
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
 
     const extensions = loadExtensions(tempWorkspaceDir);
 
@@ -174,8 +163,6 @@ describe('loadExtensions', () => {
     ]);
   });
 
-<<<<<<< HEAD
-=======
   it('should filter out disabled extensions', () => {
     createExtension({
       extensionsDir: workspaceExtensionsDir,
@@ -188,7 +175,7 @@ describe('loadExtensions', () => {
       version: '2.0.0',
     });
 
-    const settingsDir = path.join(tempWorkspaceDir, GEMINI_DIR);
+    const settingsDir = path.join(tempWorkspaceDir, LLXPRT_DIR);
     fs.mkdirSync(settingsDir, { recursive: true });
     fs.writeFileSync(
       path.join(settingsDir, 'settings.json'),
@@ -205,7 +192,6 @@ describe('loadExtensions', () => {
     expect(activeExtensions[0].name).toBe('ext2');
   });
 
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
   it('should hydrate variables', () => {
     createExtension({
       extensionsDir: workspaceExtensionsDir,
@@ -233,12 +219,6 @@ describe('loadExtensions', () => {
 });
 
 describe('annotateActiveExtensions', () => {
-<<<<<<< HEAD
-  const extensions = [
-    { config: { name: 'ext1', version: '1.0.0' }, contextFiles: [] },
-    { config: { name: 'ext2', version: '1.0.0' }, contextFiles: [] },
-    { config: { name: 'ext3', version: '1.0.0' }, contextFiles: [] },
-=======
   const extensions: Extension[] = [
     {
       path: '/path/to/ext1',
@@ -255,7 +235,6 @@ describe('annotateActiveExtensions', () => {
       config: { name: 'ext3', version: '1.0.0' },
       contextFiles: [],
     },
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
   ];
 
   it('should mark all extensions as active if no enabled extensions are provided', () => {
@@ -311,11 +290,7 @@ describe('installExtension', () => {
       path.join(os.tmpdir(), 'llxprt-cli-test-home-'),
     );
     vi.mocked(os.homedir).mockReturnValue(tempHomeDir);
-<<<<<<< HEAD
-    userExtensionsDir = path.join(tempHomeDir, '.llxprt', 'extensions');
-=======
-    userExtensionsDir = path.join(tempHomeDir, GEMINI_DIR, 'extensions');
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
+    userExtensionsDir = path.join(tempHomeDir, LLXPRT_DIR, 'extensions');
     // Clean up before each test
     fs.rmSync(userExtensionsDir, { recursive: true, force: true });
     fs.mkdirSync(userExtensionsDir, { recursive: true });
@@ -416,11 +391,7 @@ describe('uninstallExtension', () => {
       path.join(os.tmpdir(), 'llxprt-cli-test-home-'),
     );
     vi.mocked(os.homedir).mockReturnValue(tempHomeDir);
-<<<<<<< HEAD
-    userExtensionsDir = path.join(tempHomeDir, '.llxprt', 'extensions');
-=======
-    userExtensionsDir = path.join(tempHomeDir, GEMINI_DIR, 'extensions');
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
+    userExtensionsDir = path.join(tempHomeDir, LLXPRT_DIR, 'extensions');
     // Clean up before each test
     fs.rmSync(userExtensionsDir, { recursive: true, force: true });
     fs.mkdirSync(userExtensionsDir, { recursive: true });
@@ -526,7 +497,7 @@ describe('performWorkspaceExtensionMigration', () => {
 
       const userExtensionsDir = path.join(
         tempHomeDir,
-        GEMINI_DIR,
+        LLXPRT_DIR,
         'extensions',
       );
 
@@ -568,11 +539,7 @@ describe('performWorkspaceExtensionMigration', () => {
 
     expect(failed).toEqual([]);
 
-<<<<<<< HEAD
-    const userExtensionsDir = path.join(tempHomeDir, '.llxprt', 'extensions');
-=======
-    const userExtensionsDir = path.join(tempHomeDir, GEMINI_DIR, 'extensions');
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
+    const userExtensionsDir = path.join(tempHomeDir, LLXPRT_DIR, 'extensions');
     const userExt1Path = path.join(userExtensionsDir, 'ext1');
     const extensions = loadExtensions(tempWorkspaceDir);
 
@@ -641,11 +608,7 @@ describe('updateExtension', () => {
       path.join(os.tmpdir(), 'llxprt-cli-test-home-'),
     );
     vi.mocked(os.homedir).mockReturnValue(tempHomeDir);
-<<<<<<< HEAD
-    userExtensionsDir = path.join(tempHomeDir, '.llxprt', 'extensions');
-=======
-    userExtensionsDir = path.join(tempHomeDir, GEMINI_DIR, 'extensions');
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
+    userExtensionsDir = path.join(tempHomeDir, LLXPRT_DIR, 'extensions');
     // Clean up before each test
     fs.rmSync(userExtensionsDir, { recursive: true, force: true });
     fs.mkdirSync(userExtensionsDir, { recursive: true });
@@ -775,11 +738,7 @@ describe('enableExtension', () => {
     tempHomeDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'llxprt-cli-test-home-'),
     );
-<<<<<<< HEAD
-    userExtensionsDir = path.join(tempHomeDir, '.llxprt', 'extensions');
-=======
-    userExtensionsDir = path.join(tempHomeDir, GEMINI_DIR, 'extensions');
->>>>>>> 2fc857092 (fix(trust): Refuse to load extensions from untrusted workspaces (#7342))
+    userExtensionsDir = path.join(tempHomeDir, LLXPRT_DIR, 'extensions');
     vi.mocked(os.homedir).mockReturnValue(tempHomeDir);
     vi.spyOn(process, 'cwd').mockReturnValue(tempWorkspaceDir);
   });

@@ -206,10 +206,6 @@ describe('FileCommandLoader', () => {
       getFolderTrust: vi.fn(() => false),
     } as unknown as Config;
 
-
-
-
-
     const loader = new FileCommandLoader(mockConfig);
     const commands = await loader.loadCommands(signal);
     expect(commands).toHaveLength(1);
@@ -255,10 +251,6 @@ describe('FileCommandLoader', () => {
       getFolderTrustFeature: vi.fn(() => false),
       getFolderTrust: vi.fn(() => false),
     } as unknown as Config;
-
-
-
-
 
     const loader = new FileCommandLoader(mockConfig);
     const commands = await loader.loadCommands(signal);
@@ -1032,8 +1024,6 @@ describe('FileCommandLoader', () => {
     });
   });
 
-
-
   describe('@-file Processor Integration', () => {
     it('correctly processes a command with @{file}', async () => {
       const userCommandsDir = Storage.getUserCommandsDir();
@@ -1099,7 +1089,8 @@ describe('FileCommandLoader', () => {
         getExtensions: vi.fn(() => []),
         getFolderTrustFeature: vi.fn(() => true),
         getFolderTrust: vi.fn(() => true),
-  
+      } as unknown as Config;
+
       const userCommandsDir = Storage.getUserCommandsDir();
       mock({
         [userCommandsDir]: {
@@ -1119,8 +1110,9 @@ describe('FileCommandLoader', () => {
         getProjectRoot: vi.fn(() => '/path/to/project'),
         getExtensions: vi.fn(() => []),
         getFolderTrustFeature: vi.fn(() => true),
-  
-  
+        getFolderTrust: vi.fn(() => false),
+      } as unknown as Config;
+
       const userCommandsDir = Storage.getUserCommandsDir();
       mock({
         [userCommandsDir]: {
@@ -1135,5 +1127,4 @@ describe('FileCommandLoader', () => {
       expect(commands).toHaveLength(0);
     });
   });
-
 });

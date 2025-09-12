@@ -564,7 +564,7 @@ export async function loadCliConfig(
   const folderTrustFeature = settings.folderTrustFeature ?? false;
   const folderTrustSetting = settings.folderTrust ?? true;
   const folderTrust = folderTrustFeature && folderTrustSetting;
-  const trustedFolder = folderTrust ? isWorkspaceTrusted() : true;
+  const trustedFolder = folderTrust ? isWorkspaceTrusted(settings) : true;
 
   const allExtensions = annotateActiveExtensions(
     extensions,

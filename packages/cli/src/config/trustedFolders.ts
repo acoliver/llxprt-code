@@ -7,8 +7,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { homedir } from 'os';
-import { getErrorMessage, isWithinRoot, type Settings } from '@vybestack/llxprt-code-core';
+import { getErrorMessage, isWithinRoot } from '@vybestack/llxprt-code-core';
 import stripJsonComments from 'strip-json-comments';
+import type { Settings } from './settings.js';
 
 export const TRUSTED_FOLDERS_FILENAME = 'trustedFolders.json';
 export const SETTINGS_DIRECTORY_NAME = '.llxprt';
@@ -154,9 +155,8 @@ export function saveTrustedFolders(
 
 /** Is folder trust feature enabled per the current applied settings */
 export function isFolderTrustEnabled(settings: Settings): boolean {
-  const folderTrustFeature =
-    settings.security?.folderTrust?.featureEnabled ?? false;
-  const folderTrustSetting = settings.security?.folderTrust?.enabled ?? true;
+  const folderTrustFeature = settings.folderTrustFeature ?? false;
+  const folderTrustSetting = settings.folderTrust ?? true;
   return folderTrustFeature && folderTrustSetting;
 }
 

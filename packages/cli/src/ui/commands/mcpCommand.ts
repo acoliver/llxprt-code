@@ -146,9 +146,10 @@ const getMcpStatus = async (
         const { MCPOAuthTokenStorage } = await import(
           '@vybestack/llxprt-code-core'
         );
-        const hasToken = await MCPOAuthTokenStorage.getToken(serverName);
+        const tokenStorage = new MCPOAuthTokenStorage();
+        const hasToken = await tokenStorage.getToken(serverName);
         if (hasToken) {
-          const isExpired = MCPOAuthTokenStorage.isTokenExpired(hasToken.token);
+          const isExpired = tokenStorage.isTokenExpired(hasToken.token);
           if (isExpired) {
             message += ` ${COLOR_YELLOW}(OAuth token expired)${RESET_COLOR}`;
           } else {

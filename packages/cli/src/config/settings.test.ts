@@ -56,7 +56,6 @@ import {
   getSystemDefaultsPath,
   SETTINGS_DIRECTORY_NAME, // This is from the original module, but used by the mock.
   SettingScope,
-  migrateSettingsToV1,
   type Settings,
   loadEnvironment,
 } from './settings.js';

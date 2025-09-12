@@ -5,8 +5,8 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { type Config, type Settings } from '@vybestack/llxprt-code-core';
-import { LoadedSettings } from '../../config/settings.js';
+import { type Config } from '@vybestack/llxprt-code-core';
+import { LoadedSettings, type Settings } from '../../config/settings.js';
 import { FolderTrustChoice } from '../components/FolderTrustDialog.js';
 import {
   loadTrustedFolders,
