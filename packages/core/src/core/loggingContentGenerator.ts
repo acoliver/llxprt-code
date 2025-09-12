@@ -166,7 +166,7 @@ export class LoggingContentGenerator implements ContentGenerator {
       this._logApiError(
         durationMs,
         error,
-        responses[0]?.modelVersion || '',
+        lastResponse?.modelVersion || '',
         userPromptId,
       );
       throw error;
@@ -175,7 +175,7 @@ export class LoggingContentGenerator implements ContentGenerator {
     if (lastResponse) {
       this._logApiResponse(
         durationMs,
-        responses[0]?.modelVersion || '',
+        lastResponse?.modelVersion || '',
         userPromptId,
         lastUsageMetadata,
         JSON.stringify(lastResponse),
