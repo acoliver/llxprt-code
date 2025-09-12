@@ -20,7 +20,11 @@ export type { MCPOAuthToken, MCPOAuthCredentials };
  * delegating to the new BaseTokenStore architecture.
  */
 export class MCPOAuthTokenStorage {
-  private static tokenStore: BaseTokenStore = new FileTokenStore();
+  private tokenStore: BaseTokenStore;
+
+  constructor(tokenStore?: BaseTokenStore) {
+    this.tokenStore = tokenStore || new FileTokenStore();
+  }
 
   /**
    * Set a custom token store implementation.
@@ -28,7 +32,7 @@ export class MCPOAuthTokenStorage {
    *
    * @param store The token store to use
    */
-  static setTokenStore(store: BaseTokenStore): void {
+  setTokenStore(store: BaseTokenStore): void {
     this.tokenStore = store;
   }
 
@@ -37,7 +41,7 @@ export class MCPOAuthTokenStorage {
    *
    * @returns The current token store
    */
-  static getTokenStore(): BaseTokenStore {
+  getTokenStore(): BaseTokenStore {
     return this.tokenStore;
   }
 
@@ -46,7 +50,7 @@ export class MCPOAuthTokenStorage {
    *
    * @returns A map of server names to credentials
    */
-  static async loadTokens(): Promise<Map<string, MCPOAuthCredentials>> {
+  async loadTokens(): Promise<Map<string, MCPOAuthCredentials>> {
     return this.tokenStore.loadTokens();
   }
 
@@ -59,7 +63,7 @@ export class MCPOAuthTokenStorage {
    * @param tokenUrl Optional token URL used for this token
    * @param mcpServerUrl Optional MCP server URL
    */
-  static async saveToken(
+  async saveToken(
     serverName: string,
     token: MCPOAuthToken,
     clientId?: string,
@@ -81,9 +85,7 @@ export class MCPOAuthTokenStorage {
    * @param serverName The name of the MCP server
    * @returns The stored credentials or null if not found
    */
-  static async getToken(
-    serverName: string,
-  ): Promise<MCPOAuthCredentials | null> {
+  async getToken(serverName: string): Promise<MCPOAuthCredentials | null> {
     return this.tokenStore.getToken(serverName);
   }
 
@@ -92,7 +94,7 @@ export class MCPOAuthTokenStorage {
    *
    * @param serverName The name of the MCP server
    */
-  static async removeToken(serverName: string): Promise<void> {
+  async removeToken(serverName: string): Promise<void> {
     return this.tokenStore.removeToken(serverName);
   }
 
@@ -102,14 +104,14 @@ export class MCPOAuthTokenStorage {
    * @param token The token to check
    * @returns True if the token is expired
    */
-  static isTokenExpired(token: MCPOAuthToken): boolean {
+  isTokenExpired(token: MCPOAuthToken): boolean {
     return BaseTokenStore.isTokenExpired(token);
   }
 
   /**
    * Clear all stored MCP OAuth tokens.
    */
-  static async clearAllTokens(): Promise<void> {
+  async clearAllTokens(): Promise<void> {
     return this.tokenStore.clearAllTokens();
   }
 }

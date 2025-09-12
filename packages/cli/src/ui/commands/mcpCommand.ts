@@ -383,7 +383,9 @@ const authCommand: SlashCommand = {
       );
 
       // Import dynamically to avoid circular dependencies
-      const { MCPOAuthProvider } = await import('@vybestack/llxprt-code-core');
+      const { MCPOAuthProvider, MCPOAuthTokenStorage } = await import(
+        '@vybestack/llxprt-code-core'
+      );
 
       let oauthConfig = server.oauth;
       if (!oauthConfig) {
@@ -392,11 +394,8 @@ const authCommand: SlashCommand = {
 
       // Pass the MCP server URL for OAuth discovery
       const mcpServerUrl = server.httpUrl || server.url;
-      await MCPOAuthProvider.authenticate(
-        serverName,
-        oauthConfig,
-        mcpServerUrl,
-      );
+      const authProvider = new MCPOAuthProvider(new MCPOAuthTokenStorage());
+      await authProvider.authenticate(serverName, oauthConfig, mcpServerUrl);
 
       context.ui.addItem(
         {
