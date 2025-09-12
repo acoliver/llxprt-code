@@ -131,11 +131,7 @@ describe('loadServerHierarchicalMemory', () => {
 
   it('should load only the global context file if present and others are not (default filename)', async () => {
     const defaultContextFile = await createTestFile(
-<<<<<<< HEAD
       path.join(homedir, LLXPRT_CONFIG_DIR, DEFAULT_CONTEXT_FILENAME),
-=======
-      path.join(homedir, GEMINI_DIR, DEFAULT_CONTEXT_FILENAME),
->>>>>>> 5e5f2dffc (fix(trust): Respect folder trust setting when reading GEMINI.md (#7409))
       'default context content',
     );
 
@@ -159,11 +155,7 @@ describe('loadServerHierarchicalMemory', () => {
     setLlxprtMdFilename(customFilename);
 
     const customContextFile = await createTestFile(
-<<<<<<< HEAD
       path.join(homedir, LLXPRT_CONFIG_DIR, customFilename),
-=======
-      path.join(homedir, GEMINI_DIR, customFilename),
->>>>>>> 5e5f2dffc (fix(trust): Respect folder trust setting when reading GEMINI.md (#7409))
       'custom context content',
     );
 
@@ -287,11 +279,7 @@ describe('loadServerHierarchicalMemory', () => {
 
   it('should load and correctly order global, upward, and downward ORIGINAL_GEMINI_MD_FILENAME files', async () => {
     const defaultContextFile = await createTestFile(
-<<<<<<< HEAD
       path.join(homedir, LLXPRT_CONFIG_DIR, DEFAULT_CONTEXT_FILENAME),
-=======
-      path.join(homedir, GEMINI_DIR, DEFAULT_CONTEXT_FILENAME),
->>>>>>> 5e5f2dffc (fix(trust): Respect folder trust setting when reading GEMINI.md (#7409))
       'default context content',
     );
     const rootGeminiFile = await createTestFile(
