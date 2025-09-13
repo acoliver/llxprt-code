@@ -33,8 +33,9 @@ import type {
   ModifyContext,
 } from './modifiable-tool.js';
 import { IdeClient, IDEConnectionStatus } from '../ide/ide-client.js';
-import { logFileOperation } from '../telemetry/loggers.js';
-import { FileOperationEvent } from '../telemetry/types.js';
+// TODO: Re-enable when telemetry modules are available
+// import { logFileOperation } from '../telemetry/loggers.js';
+// import { FileOperationEvent } from '../telemetry/types.js';
 import { getSpecificMimeType } from '../utils/fileUtils.js';
 import {
   recordFileOperationMetric,

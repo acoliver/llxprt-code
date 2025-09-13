@@ -8,7 +8,11 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { OAuth2Client, Compute } from 'google-auth-library';
 import type { Config } from '../config/config.js';
 import { AuthType } from '../core/contentGenerator.js';
-import { getOauthClient, clearCachedCredentialFile, clearOauthClientCache } from './oauth2.js';
+import {
+  getOauthClient,
+  clearCachedCredentialFile,
+  clearOauthClientCache,
+} from './oauth2.js';
 import { UserAccountManager } from '../utils/userAccountManager.js';
 import readline from 'node:readline';
 import http from 'http';
@@ -30,21 +34,21 @@ let mockConfig: Config;
 beforeEach(() => {
   // Create temporary directory for test isolation
   tempHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oauth-test-'));
-  
+
   // Mock HOME environment variable
   vi.stubEnv('HOME', tempHomeDir);
-  
+
   mockConfig = {
     getProxy: () => undefined,
     isBrowserLaunchSuppressed: () => false,
   } as unknown as Config;
-  
+
   // Mock fetch for userinfo API calls
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
     json: vi.fn().mockResolvedValue({ email: 'test@example.com' }),
   } as unknown as Response);
-  
+
   // Reset all mocks
   vi.clearAllMocks();
 });

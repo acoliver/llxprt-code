@@ -24,6 +24,7 @@
   ],
   "dependencies": {
     "@a2a-js/sdk": "^0.3.2",
+    "@google/genai": "1.13.0",
     "@google-cloud/storage": "^7.16.0",
     "@vybestack/llxprt-code-core": "file:../core",
     "express": "^5.1.0",

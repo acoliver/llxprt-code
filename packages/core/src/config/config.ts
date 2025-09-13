@@ -327,6 +327,7 @@ export class Config {
   private readonly noBrowser: boolean;
   private readonly folderTrust: boolean;
   private ideMode: boolean;
+  private ideClient?: IdeClient;
 
   private inFallbackMode = false;
   private _modelSwitchedDuringSession: boolean = false;
@@ -492,7 +493,8 @@ export class Config {
 
     if (this.getIdeMode()) {
       await (await IdeClient.getInstance()).connect();
-      logIdeConnection(this, new IdeConnectionEvent(IdeConnectionType.START));
+      // TODO: Re-enable IDE connection logging when logIdeConnection is available
+      // logIdeConnection(this, new IdeConnectionEvent(IdeConnectionType.START));
     }
 
     // Initialize centralized FileDiscoveryService

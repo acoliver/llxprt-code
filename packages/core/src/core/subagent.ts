@@ -235,6 +235,7 @@ export class SubAgentScope {
     emitted_vars: {},
   };
   private readonly subagentId: string;
+  onMessage?: (message: string) => void;
 
   /**
    * Constructs a new SubAgentScope instance.
@@ -407,6 +408,7 @@ export class SubAgentScope {
         );
 
         const functionCalls: FunctionCall[] = [];
+        let textResponse = '';
         for await (const resp of responseStream) {
           if (abortController.signal.aborted) return;
           if (resp.type === StreamEventType.CHUNK && resp.value.functionCalls) {

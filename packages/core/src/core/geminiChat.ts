@@ -727,6 +727,9 @@ export class GeminiChat {
    * }
    * ```
    */
+  async sendMessageStream(
+    params: SendMessageParameters,
+    prompt_id: string,
   ): Promise<AsyncGenerator<StreamEvent>> {
     this.logger.debug(
       () => 'DEBUG [geminiChat]: ===== SEND MESSAGE STREAM START =====',
@@ -830,7 +833,6 @@ export class GeminiChat {
             }
 
             const stream = await instance.makeApiCallAndProcessStream(
-              requestContents,
               params,
               prompt_id,
               userContent,
@@ -1633,7 +1635,7 @@ export class GeminiChat {
   //     };
   //   }
 
-  private async maybeIncludeSchemaDepthContext(error: unknown): Promise<void> {
+  async maybeIncludeSchemaDepthContext(error: unknown): Promise<void> {
     // Check for potentially problematic cyclic tools with cyclic schemas
     // and include a recommendation to remove potentially problematic tools.
     if (isStructuredError(error) && isSchemaDepthError(error.message)) {

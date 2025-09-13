@@ -16,6 +16,7 @@ import {
   ToolInvocation,
   ToolLocation,
   ToolResult,
+  ToolResultDisplay,
 } from './tools.js';
 import { ToolErrorType } from './tool-error.js';
 import { makeRelative, shortenPath } from '../utils/paths.js';
@@ -24,11 +25,12 @@ import { Config, ApprovalMode } from '../config/config.js';
 import { ensureCorrectEdit } from '../utils/editCorrector.js';
 import { DEFAULT_DIFF_OPTIONS, getDiffStat } from './diffOptions.js';
 import { ReadFileTool } from './read-file.js';
-import { logFileOperation } from '../telemetry/loggers.js';
-import { FileOperationEvent } from '../telemetry/types.js';
-import { FileOperation } from '../telemetry/metrics.js';
-import { getSpecificMimeType } from '../utils/fileUtils.js';
-import { getLanguageFromFilePath } from '../utils/language-detection.js';
+// TODO: Re-enable when telemetry and language detection modules are available
+// import { logFileOperation } from '../telemetry/loggers.js';
+// import { FileOperationEvent } from '../telemetry/types.js';
+// import { FileOperation } from '../telemetry/metrics.js';
+// import { getSpecificMimeType } from '../utils/fileUtils.js';
+// import { getLanguageFromFilePath } from '../utils/language-detection.js';
 import type {
   ModifiableDeclarativeTool,
   ModifyContext,
@@ -493,7 +495,7 @@ class EditToolInvocation implements ToolInvocation<EditToolParams, ToolResult> {
 
       const fileName = path.basename(this.params.file_path);
       const originallyProposedContent =
-        this.params.ai_proposed_content || editData.newContent;
+        this.params.ai_proposed_string || editData.newContent;
       const diffStat = getDiffStat(
         fileName,
         editData.currentContent ?? '',

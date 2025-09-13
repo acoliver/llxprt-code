@@ -29,7 +29,8 @@ import {
   type ModifyContext,
 } from './modifiable-tool.js';
 import { IdeClient, IDEConnectionStatus } from '../ide/ide-client.js';
-import { FixLLMEditWithInstruction } from '../utils/llm-edit-fixer.js';
+// TODO: Re-enable when llm-edit-fixer module is available
+// import { FixLLMEditWithInstruction } from '../utils/llm-edit-fixer.js';
 
 export function applyReplacement(
   currentContent: string | null,
@@ -304,37 +305,21 @@ class EditToolInvocation implements ToolInvocation<EditToolParams, ToolResult> {
     abortSignal: AbortSignal,
     originalLineEnding: '\r\n' | '\n',
   ): Promise<CalculatedEdit> {
-    const fixedEdit = await FixLLMEditWithInstruction(
-      params.instruction,
-      params.old_string,
-      params.new_string,
-      initialError.raw,
-      currentContent,
-      this.config.getGeminiClient(),
-      abortSignal,
-    );
+    // TODO: Re-enable when FixLLMEditWithInstruction is available
+    // const fixedEdit = await FixLLMEditWithInstruction(
+    //   params.instruction,
+    //   params.old_string,
+    //   params.new_string,
+    //   initialError.raw,
+    //   currentContent,
+    //   this.config.getGeminiClient(),
+    //   abortSignal,
+    // );
 
-    if (fixedEdit.noChangesRequired) {
-      return {
-        currentContent,
-        newContent: currentContent,
-        occurrences: 0,
-        isNewFile: false,
-        error: {
-          display: `No changes required. The file already meets the specified conditions.`,
-          raw: `A secondary check determined that no changes were necessary to fulfill the instruction. Explanation: ${fixedEdit.explanation}. Original error with the parameters given: ${initialError.raw}`,
-          type: ToolErrorType.EDIT_NO_CHANGE,
-        },
-        originalLineEnding,
-      };
-    }
-
+    // TODO: Re-enable when FixLLMEditWithInstruction is available
+    // For now, just fallback to the original edit attempt
     const secondAttemptResult = await calculateReplacement({
-      params: {
-        ...params,
-        old_string: fixedEdit.search,
-        new_string: fixedEdit.replace,
-      },
+      params,
       currentContent,
       abortSignal,
     });

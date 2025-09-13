@@ -64,6 +64,7 @@ function getRealPath(path: string): string {
  * Manages the connection to and interaction with the IDE server.
  */
 export class IdeClient {
+  private static instance: IdeClient | undefined = undefined;
   private static instancePromise: Promise<IdeClient> | null = null;
   private client: Client | undefined = undefined;
   private state: IDEConnectionState = {
@@ -97,7 +98,10 @@ export class IdeClient {
   }
 
   static resetInstance(): void {
-    IdeClient.instance = undefined as unknown as IdeClient;
+    if (IdeClient.instance) {
+      IdeClient.instance = undefined;
+    }
+    IdeClient.instancePromise = null;
   }
 
   addStatusChangeListener(listener: (state: IDEConnectionState) => void) {

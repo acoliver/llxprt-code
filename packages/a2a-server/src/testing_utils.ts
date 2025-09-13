@@ -9,9 +9,12 @@ import type {
   TaskStatusUpdateEvent,
   SendStreamingMessageSuccessResponse,
 } from '@a2a-js/sdk';
-import { ApprovalMode } from '@vybestack/llxprt-code-core';
+import { ApprovalMode, MockTool } from '@vybestack/llxprt-code-core';
 import type { Config } from '@vybestack/llxprt-code-core';
 import { expect, vi } from 'vitest';
+
+// Re-export MockTool for convenience
+export { MockTool };
 
 export function createMockConfig(
   overrides: Partial<Config> = {},
