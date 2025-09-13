@@ -803,7 +803,7 @@ export async function loadCliConfig(
   const finalModel: string =
     argv.model ||
     profileModel ||
-    effectiveSettings.model ||
+    (effectiveSettings.model as string) ||
     process.env.LLXPRT_DEFAULT_MODEL ||
     process.env.GEMINI_MODEL ||
     // If no model specified and provider is gemini, use the Gemini default
@@ -881,7 +881,7 @@ export async function loadCliConfig(
       process.env.http_proxy,
     cwd,
     fileDiscoveryService: fileService,
-    bugCommand: effectiveSettings.bugCommand,
+    bugCommand: effectiveSettings.advanced?.bugCommand,
     model: finalModel,
     extensionContextFilePaths,
     maxSessionTurns: effectiveSettings.maxSessionTurns ?? -1,

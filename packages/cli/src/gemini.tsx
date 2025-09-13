@@ -205,12 +205,12 @@ export async function startInteractiveUI(
 
 export async function main() {
   setupUnhandledRejectionHandler();
-  const settings = loadSettings();
+  const settings = loadSettings(process.cwd());
 
   await cleanupCheckpoints();
 
   const argv = await parseArguments(settings.merged);
-  const extensions = loadExtensions();
+  const extensions = loadExtensions(process.cwd());
   const config = await loadCliConfig(
     settings.merged,
     extensions,
@@ -255,7 +255,7 @@ export async function main() {
   }
 
   // Set a default auth type if one isn't set.
-  if (!settings.merged.security?.auth?.selectedType) {
+  if (!settings.merged.selectedAuthType) {
     if (process.env['CLOUD_SHELL'] === 'true') {
       settings.setValue(
         SettingScope.User,
@@ -287,13 +287,13 @@ export async function main() {
   }
 
   // Load custom themes from settings
-  themeManager.loadCustomThemes(settings.merged.ui?.customThemes);
+  themeManager.loadCustomThemes(settings.merged.customThemes);
 
-  if (settings.merged.ui?.theme) {
-    if (!themeManager.setActiveTheme(settings.merged.ui?.theme)) {
+  if (settings.merged.theme) {
+    if (!themeManager.setActiveTheme(settings.merged.theme)) {
       // If the theme is not found during initial load, log a warning and continue.
       // The useThemeCommand hook in App.tsx will handle opening the dialog.
-      console.warn(`Warning: Theme "${settings.merged.ui?.theme}" not found.`);
+      console.warn(`Warning: Theme "${settings.merged.theme}" not found.`);
     }
   }
 
@@ -305,18 +305,18 @@ export async function main() {
     const sandboxConfig = config.getSandbox();
     if (sandboxConfig) {
       if (
-        settings.merged.security?.auth?.selectedType &&
-        !settings.merged.security?.auth?.useExternal
+        settings.merged.selectedAuthType &&
+        !settings.merged.useExternalAuth
       ) {
         // Validate authentication here because the sandbox will interfere with the Oauth2 web redirect.
         try {
           const err = validateAuthMethod(
-            settings.merged.security.auth.selectedType,
+            settings.merged.selectedAuthType,
           );
           if (err) {
             throw new Error(err);
           }
-          await config.refreshAuth(settings.merged.security.auth.selectedType);
+          await config.refreshAuth(settings.merged.selectedAuthType);
         } catch (err) {
           console.error('Error authenticating:', err);
           process.exit(1);
@@ -365,22 +365,22 @@ export async function main() {
   }
 
   if (
-    settings.merged.security?.auth?.selectedType ===
+    settings.merged.selectedAuthType ===
       AuthType.LOGIN_WITH_GOOGLE &&
     config.isBrowserLaunchSuppressed()
   ) {
     // Do oauth before app renders to make copying the link possible.
-    await getOauthClient(settings.merged.security.auth.selectedType, config);
+    await getOauthClient(settings.merged.selectedAuthType, config);
   }
 
   if (config.getExperimentalZedIntegration()) {
-    return runZedIntegration(config, settings, extensions, argv);
+    return runZedIntegration(config, settings);
   }
 
   let input = config.getQuestion();
   const startupWarnings = [
     ...(await getStartupWarnings()),
-    ...(await getUserStartupWarnings()),
+    ...(await getUserStartupWarnings(process.cwd())),
   ];
 
   // Render UI, passing necessary config values. Check that there is no command line question.
@@ -414,8 +414,8 @@ export async function main() {
   });
 
   const nonInteractiveConfig = await validateNonInteractiveAuth(
-    settings.merged.security?.auth?.selectedType,
-    settings.merged.security?.auth?.useExternal,
+    settings.merged.selectedAuthType,
+    settings.merged.useExternalAuth,
     config,
     settings,
   );
@@ -431,7 +431,7 @@ export async function main() {
 }
 
 function setWindowTitle(title: string, settings: LoadedSettings) {
-  if (!settings.merged.ui?.hideWindowTitle) {
+  if (!settings.merged.hideWindowTitle) {
     const windowTitle = (
       process.env['CLI_TITLE'] || `Gemini - ${title}`
     ).replace(

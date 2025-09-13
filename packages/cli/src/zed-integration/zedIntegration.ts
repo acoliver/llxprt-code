@@ -526,9 +526,11 @@ class Session {
           }
 
           // Extract function calls from the response using the proper utility
-          const respFunctionCalls = getFunctionCalls(resp);
-          if (respFunctionCalls && respFunctionCalls.length > 0) {
-            functionCalls.push(...respFunctionCalls);
+          if (resp.type === 'chunk') {
+            const respFunctionCalls = getFunctionCalls(resp.value);
+            if (respFunctionCalls && respFunctionCalls.length > 0) {
+              functionCalls.push(...respFunctionCalls);
+            }
           }
         }
       } catch (error) {

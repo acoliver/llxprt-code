@@ -8,7 +8,6 @@ import type { Config } from '@vybestack/llxprt-code-core';
 import {
   GeminiEventType,
   ApprovalMode,
-  type ToolCallConfirmationDetails,
 } from '@vybestack/llxprt-code-core';
 import type {
   TaskStatusUpdateEvent,
@@ -35,8 +34,6 @@ import {
   MockTool,
 } from './testing_utils.js';
 
-const mockToolConfirmationFn = async () =>
-  ({}) as unknown as ToolCallConfirmationDetails;
 
 const streamToSSEEvents = (
   stream: string,
@@ -192,10 +189,8 @@ describe('E2E Tests', () => {
     const mockTool = new MockTool(
       'test-tool',
       'Test Tool',
-      true,
-      false,
-      mockToolConfirmationFn,
     );
+    mockTool.shouldConfirm = true;
 
     getToolRegistrySpy.mockReturnValue({
       getAllTools: vi.fn().mockReturnValue([mockTool]),
@@ -287,16 +282,10 @@ describe('E2E Tests', () => {
     const mockTool1 = new MockTool(
       'test-tool-1',
       'Test Tool 1',
-      false,
-      false,
-      mockToolConfirmationFn,
     );
     const mockTool2 = new MockTool(
       'test-tool-2',
       'Test Tool 2',
-      false,
-      false,
-      mockToolConfirmationFn,
     );
 
     getToolRegistrySpy.mockReturnValue({
@@ -408,7 +397,7 @@ describe('E2E Tests', () => {
       'test-tool-no-approval',
       'Test Tool No Approval',
     );
-    mockTool.execute.mockResolvedValue({
+    mockTool.executeFn.mockResolvedValue({
       llmContent: 'Tool executed successfully.',
       returnDisplay: 'Tool executed successfully.',
     });
@@ -538,10 +527,8 @@ describe('E2E Tests', () => {
     const mockTool = new MockTool(
       'test-tool-yolo',
       'Test Tool YOLO',
-      false,
-      false,
     );
-    mockTool.execute.mockResolvedValue({
+    mockTool.executeFn.mockResolvedValue({
       llmContent: 'Tool executed successfully.',
       returnDisplay: 'Tool executed successfully.',
     });

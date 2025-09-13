@@ -8,15 +8,15 @@ import {
   type Config,
   IdeClient,
   type File,
-  logIdeConnection,
-  IdeConnectionEvent,
-  IdeConnectionType,
+  // logIdeConnection,
+  // IdeConnectionEvent,
+  // IdeConnectionType,
 } from '@vybestack/llxprt-code-core';
 import {
   getIdeInstaller,
   IDEConnectionStatus,
   ideContext,
-  GEMINI_CLI_COMPANION_EXTENSION_NAME,
+  // GEMINI_CLI_COMPANION_EXTENSION_NAME,
 } from '@vybestack/llxprt-code-core';
 import path from 'node:path';
 import type {
@@ -126,7 +126,7 @@ async function setIdeModeAndSyncConnection(
   const ideClient = await IdeClient.getInstance();
   if (value) {
     await ideClient.connect();
-    logIdeConnection(config, new IdeConnectionEvent(IdeConnectionType.SESSION));
+    // logIdeConnection(config, new IdeConnectionEvent(IdeConnectionType.SESSION));
   } else {
     await ideClient.disconnect();
   }
@@ -181,7 +181,7 @@ export const ideCommand = async (): Promise<SlashCommand> => {
         context.ui.addItem(
           {
             type: 'error',
-            text: `No installer is available for ${ideClient.getDetectedIdeDisplayName()}. Please install the '${GEMINI_CLI_COMPANION_EXTENSION_NAME}' extension manually from the marketplace.`,
+            text: `No installer is available for ${ideClient.getDetectedIdeDisplayName()}. Please install the 'llxprt-code' extension manually from the marketplace.`,
           },
           Date.now(),
         );
@@ -207,7 +207,7 @@ export const ideCommand = async (): Promise<SlashCommand> => {
       if (result.success) {
         context.services.settings.setValue(
           SettingScope.User,
-          'ide.enabled',
+          'ideMode',
           true,
         );
         // Poll for up to 5 seconds for the extension to activate.
@@ -251,7 +251,7 @@ export const ideCommand = async (): Promise<SlashCommand> => {
     action: async (context: CommandContext) => {
       context.services.settings.setValue(
         SettingScope.User,
-        'ide.enabled',
+        'ideMode',
         true,
       );
       await setIdeModeAndSyncConnection(context.services.config!, true);
@@ -273,7 +273,7 @@ export const ideCommand = async (): Promise<SlashCommand> => {
     action: async (context: CommandContext) => {
       context.services.settings.setValue(
         SettingScope.User,
-        'ide.enabled',
+        'ideMode',
         false,
       );
       await setIdeModeAndSyncConnection(context.services.config!, false);

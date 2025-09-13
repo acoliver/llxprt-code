@@ -554,7 +554,7 @@ describe('Settings Loading and Merging', () => {
       );
 
       const settings = loadSettings(MOCK_WORKSPACE_DIR);
-      expect(settings.merged.security?.folderTrust?.enabled).toBe(true); // User setting should be used
+      expect(settings.merged.folderTrust).toBe(true); // User setting should be used
     });
 
     it('should use system folderTrust over user setting', () => {
@@ -594,7 +594,7 @@ describe('Settings Loading and Merging', () => {
       );
 
       const settings = loadSettings(MOCK_WORKSPACE_DIR);
-      expect(settings.merged.security?.folderTrust?.enabled).toBe(true); // System setting should be used
+      expect(settings.merged.folderTrust).toBe(true); // System setting should be used
     });
 
     it('should handle contextFileName correctly when only in user settings', () => {

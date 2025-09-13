@@ -34,9 +34,6 @@ export * from './code_assist/types.js';
 
 // Export utilities
 export * from './utils/paths.js';
-
-// Export test utilities
-export { MockTool } from './test-utils/tools.js';
 export * from './utils/schemaValidator.js';
 export * from './utils/errors.js';
 export * from './utils/getFolderStructure.js';

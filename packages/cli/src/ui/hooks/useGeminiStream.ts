@@ -481,7 +481,7 @@ export const useGeminiStream = (
 
   const handleFinishedEvent = useCallback(
     (event: ServerGeminiFinishedEvent, userMessageTimestamp: number) => {
-      const finishReason = event.value;
+      const finishReason = event.value.reason;
 
       const finishReasonMessages: Record<FinishReason, string | undefined> = {
         [FinishReason.FINISH_REASON_UNSPECIFIED]: undefined,
@@ -505,7 +505,7 @@ export const useGeminiStream = (
           'Response stopped due to unexpected tool call.',
       };
 
-      const message = finishReasonMessages[finishReason];
+      const message = finishReason ? finishReasonMessages[finishReason] : undefined;
       if (message) {
         addItem(
           {
@@ -609,11 +609,11 @@ export const useGeminiStream = (
             // before we add loop detected message to history
             loopDetectedRef.current = true;
             break;
-          case ServerGeminiEventType.UsageMetadata:
-            // Handle usage metadata - for now just ignore
-            break;
           case ServerGeminiEventType.Retry:
             // Handle retry event to clean up response text
+            break;
+          case ServerGeminiEventType.Citation:
+            // Handle citation event - for now just ignore
             break;
           default: {
             // enforces exhaustive switch-case

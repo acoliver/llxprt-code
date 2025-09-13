@@ -329,16 +329,7 @@ function mergeSettings(
   const safeWorkspace = isTrusted ? workspace : ({} as Settings);
 
   // folderTrust is not supported at workspace level.
-  const { security, ...restOfWorkspace } = safeWorkspace;
-  const safeWorkspaceWithoutFolderTrust = security
-    ? {
-        ...restOfWorkspace,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        security: (({ folderTrust, ...rest }) => rest)(security),
-      }
-    : {
-        ...restOfWorkspace,
-      };
+  const { folderTrust, ...safeWorkspaceWithoutFolderTrust } = safeWorkspace;
 
   // Settings are merged with the following precedence (last one wins for
   // single values):
@@ -740,15 +731,15 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
   }
 
   // Support legacy theme names
-  if (userSettings.ui?.theme === 'VS') {
-    userSettings.ui.theme = DefaultLight.name;
-  } else if (userSettings.ui?.theme === 'VS2015') {
-    userSettings.ui.theme = DefaultDark.name;
+  if (userSettings.theme === 'VS') {
+    userSettings.theme = DefaultLight.name;
+  } else if (userSettings.theme === 'VS2015') {
+    userSettings.theme = DefaultDark.name;
   }
-  if (workspaceSettings.ui?.theme === 'VS') {
-    workspaceSettings.ui.theme = DefaultLight.name;
-  } else if (workspaceSettings.ui?.theme === 'VS2015') {
-    workspaceSettings.ui.theme = DefaultDark.name;
+  if (workspaceSettings.theme === 'VS') {
+    workspaceSettings.theme = DefaultLight.name;
+  } else if (workspaceSettings.theme === 'VS2015') {
+    workspaceSettings.theme = DefaultDark.name;
   }
 
   // For the initial trust check, we can only use user and system settings.

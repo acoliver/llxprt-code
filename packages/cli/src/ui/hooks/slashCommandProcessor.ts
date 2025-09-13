@@ -12,9 +12,9 @@ import type { Config } from '@vybestack/llxprt-code-core';
 import {
   GitService,
   Logger,
-  logSlashCommand,
-  makeSlashCommandEvent,
-  SlashCommandStatus,
+  // logSlashCommand,
+  // SlashCommandEvent,
+  // SlashCommandStatus,
   ToolConfirmationOutcome,
   Storage,
   IdeClient,
@@ -49,13 +49,17 @@ export const useSlashCommandProcessor = (
   openThemeDialog: () => void,
   openAuthDialog: () => void,
   openEditorDialog: () => void,
+  openProviderDialog: () => void,
+  openProviderModelDialog: () => void,
+  openLoadProfileDialog: () => void,
+  openToolsDialog: (action: 'enable' | 'disable') => void,
   toggleCorgiMode: () => void,
   setQuittingMessages: (message: HistoryItem[]) => void,
   openPrivacyNotice: () => void,
   openSettingsDialog: () => void,
   toggleVimEnabled: () => Promise<boolean>,
   setIsProcessing: (isProcessing: boolean) => void,
-  setGeminiMdFileCount: (count: number) => void,
+  setLlxprtMdFileCount: (count: number) => void,
 ) => {
   const session = useSessionStats();
   const [commands, setCommands] = useState<readonly SlashCommand[]>([]);
@@ -121,6 +125,8 @@ export const useSlashCommandProcessor = (
           modelVersion: message.modelVersion,
           selectedAuthType: message.selectedAuthType,
           gcpProject: message.gcpProject,
+          keyfile: message.keyfile,
+          key: message.key,
           ideClient: message.ideClient,
         };
       } else if (message.type === MessageType.HELP) {
@@ -182,7 +188,8 @@ export const useSlashCommandProcessor = (
         setPendingItem: setPendingCompressionItem,
         toggleCorgiMode,
         toggleVimEnabled,
-        setGeminiMdFileCount,
+        setLlxprtMdFileCount,
+        updateHistoryTokenCount: session.updateHistoryTokenCount,
         reloadCommands,
       },
       session: {
@@ -206,7 +213,7 @@ export const useSlashCommandProcessor = (
       toggleCorgiMode,
       toggleVimEnabled,
       sessionShellAllowlist,
-      setGeminiMdFileCount,
+      setLlxprtMdFileCount,
       reloadCommands,
     ],
   );
@@ -316,10 +323,10 @@ export const useSlashCommandProcessor = (
       }
 
       const resolvedCommandPath = canonicalPath;
-      const subcommand =
-        resolvedCommandPath.length > 1
-          ? resolvedCommandPath.slice(1).join(' ')
-          : undefined;
+      // const subcommand =
+      //   resolvedCommandPath.length > 1
+      //     ? resolvedCommandPath.slice(1).join(' ')
+      //     : undefined;
 
       try {
         if (commandToExecute) {
@@ -390,6 +397,22 @@ export const useSlashCommandProcessor = (
                       openSettingsDialog();
                       return { type: 'handled' };
                     case 'help':
+                      return { type: 'handled' };
+                    case 'provider':
+                      openProviderDialog();
+                      return { type: 'handled' };
+                    case 'providerModel':
+                      openProviderModelDialog();
+                      return { type: 'handled' };
+                    case 'loadProfile':
+                      openLoadProfileDialog();
+                      return { type: 'handled' };
+                    case 'tools':
+                      openToolsDialog('enable'); // Default action
+                      return { type: 'handled' };
+                    case 'logging':
+                      // TODO: Implement logging dialog
+                      onDebugMessage('Logging dialog not yet implemented');
                       return { type: 'handled' };
                     default: {
                       const unhandled: never = result.dialog;
@@ -524,12 +547,9 @@ export const useSlashCommandProcessor = (
       } catch (e: unknown) {
         hasError = true;
         if (config) {
-          const event = makeSlashCommandEvent({
-            command: resolvedCommandPath[0],
-            subcommand,
-            status: SlashCommandStatus.ERROR,
-          });
-          logSlashCommand(config, event);
+          // TODO: Fix SlashCommandEvent logging after merge
+          // const event = new SlashCommandEvent(resolvedCommandPath[0], subcommand);
+          // logSlashCommand(config, event);
         }
         addItem(
           {
@@ -541,12 +561,9 @@ export const useSlashCommandProcessor = (
         return { type: 'handled' };
       } finally {
         if (config && resolvedCommandPath[0] && !hasError) {
-          const event = makeSlashCommandEvent({
-            command: resolvedCommandPath[0],
-            subcommand,
-            status: SlashCommandStatus.SUCCESS,
-          });
-          logSlashCommand(config, event);
+          // TODO: Fix SlashCommandEvent logging after merge
+          // const event = new SlashCommandEvent(resolvedCommandPath[0], subcommand);
+          // logSlashCommand(config, event);
         }
         setIsProcessing(false);
       }

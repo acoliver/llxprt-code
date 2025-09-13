@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { IdeClient, ideContext } from '@vybestack/llxprt-code-core';
+import { IdeClient } from '@vybestack/llxprt-code-core';
 
 /**
  * This hook listens for trust status updates from the IDE companion extension.
@@ -16,18 +16,19 @@ export function useIdeTrustListener() {
   const subscribe = useCallback((onStoreChange: () => void) => {
     (async () => {
       const ideClient = await IdeClient.getInstance();
-      ideClient.addTrustChangeListener(onStoreChange);
+      // Use status change listener instead of trust change listener
+      ideClient.addStatusChangeListener(onStoreChange);
     })();
     return () => {
       (async () => {
         const ideClient = await IdeClient.getInstance();
-        ideClient.removeTrustChangeListener(onStoreChange);
+        ideClient.removeStatusChangeListener(onStoreChange);
       })();
     };
   }, []);
 
-  const getSnapshot = () =>
-    ideContext.getIdeContext()?.workspaceState?.isTrusted;
+  // For now, return undefined as IDE trust is not implemented in the context
+  const getSnapshot = () => undefined;
 
   const isIdeTrusted = useSyncExternalStore(subscribe, getSnapshot);
 
