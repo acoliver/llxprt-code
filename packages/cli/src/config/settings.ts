@@ -51,7 +51,7 @@ export const USER_SETTINGS_PATH = Storage.getGlobalSettingsPath();
 export const USER_SETTINGS_DIR = path.dirname(USER_SETTINGS_PATH);
 export const DEFAULT_EXCLUDED_ENV_VARS = ['DEBUG', 'DEBUG_MODE'];
 
-const _MIGRATE_V2_OVERWRITE = false;
+// const _MIGRATE_V2_OVERWRITE = false; // Unused for now
 
 // As defined in spec.md
 const MIGRATION_MAP: Record<string, string> = {

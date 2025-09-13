@@ -466,6 +466,9 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
       result.loadMemoryFromIncludeDirectories as boolean | undefined,
     ideMode: result.ideMode as string | undefined,
     allowedTools: result.allowedTools as string[] | undefined,
+    useSmartEdit: result.useSmartEdit as boolean | undefined,
+    sessionSummary: result.sessionSummary as string | undefined,
+    promptWords: result.promptWords as string[] | undefined,
   };
 
   return cliArgs;
