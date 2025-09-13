@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { IdeClient, ideContext } from '@google/gemini-cli-core';
+import { IdeClient, ideContext } from '@vybestack/llxprt-code-core';
 
 /**
  * This hook listens for trust status updates from the IDE companion extension.

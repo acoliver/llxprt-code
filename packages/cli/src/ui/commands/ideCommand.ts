@@ -11,13 +11,13 @@ import {
   logIdeConnection,
   IdeConnectionEvent,
   IdeConnectionType,
-} from '@google/gemini-cli-core';
+} from '@vybestack/llxprt-code-core';
 import {
   getIdeInstaller,
   IDEConnectionStatus,
   ideContext,
   GEMINI_CLI_COMPANION_EXTENSION_NAME,
-} from '@google/gemini-cli-core';
+} from '@vybestack/llxprt-code-core';
 import path from 'node:path';
 import type {
   CommandContext,
