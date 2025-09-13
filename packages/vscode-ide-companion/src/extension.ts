@@ -22,7 +22,6 @@ let logger: vscode.OutputChannel;
 let log: (message: string) => void = () => {};
 
 function updateWorkspacePath(context: vscode.ExtensionContext) {
-  console.error('updateWorkspace called with ', context);
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders && workspaceFolders.length > 0) {
     const workspacePaths = workspaceFolders
@@ -118,6 +117,13 @@ export async function activate(context: vscode.ExtensionContext) {
   const diffManager = new DiffManager(log, diffContentProvider);
 
   context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      updateWorkspacePath(context);
+    }),
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      // Update workspace path when trust is granted
+      updateWorkspacePath(context);
+    }),
     vscode.workspace.onDidCloseTextDocument((doc) => {
       if (doc.uri.scheme === DIFF_SCHEME) {
         diffManager.cancelDiff(doc.uri);
