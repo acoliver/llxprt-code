@@ -10,6 +10,7 @@ import { CommandKind } from './types.js';
 import process from 'node:process';
 import { MessageType, type HistoryItemAbout } from '../types.js';
 import { IdeClient } from '@vybestack/llxprt-code-core';
+import { getSelectedAuthType } from '../../utils/settingsUtils.js';
 
 export const aboutCommand: SlashCommand = {
   name: 'about',
@@ -54,7 +55,7 @@ export const aboutCommand: SlashCommand = {
 
     const cliVersion = await getCliVersion();
     const selectedAuthType =
-      context.services.settings.merged.selectedAuthType || '';
+      getSelectedAuthType(context.services.settings.merged) || '';
     const gcpProject = process.env['GOOGLE_CLOUD_PROJECT'] || '';
     const ideClient = await getIdeClientName(context);
 

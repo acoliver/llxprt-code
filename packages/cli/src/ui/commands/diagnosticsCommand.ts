@@ -10,6 +10,7 @@ import {
   MessageActionReturn,
   CommandKind,
 } from './types.js';
+import { getSelectedAuthType } from '../../utils/settingsUtils.js';
 
 /**
  * Get SettingsService instance for diagnostics
@@ -343,7 +344,7 @@ export const diagnosticsCommand: SlashCommand = {
       const merged = settings.merged || {};
       diagnostics.push(`- Theme: ${merged.theme || 'default'}`);
       diagnostics.push(
-        `- Selected Auth Type: ${merged.selectedAuthType || 'none'}`,
+        `- Selected Auth Type: ${getSelectedAuthType(merged) || 'none'}`,
       );
       diagnostics.push(`- Default Profile: ${merged.defaultProfile || 'none'}`);
       diagnostics.push(`- Sandbox: ${merged.sandbox || 'disabled'}`);

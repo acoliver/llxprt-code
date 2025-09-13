@@ -487,3 +487,28 @@ export function getEffectiveDisplayValue(
 ): boolean {
   return getSettingValue(key, settings, mergedSettings);
 }
+
+/**
+ * Get the selected auth type from settings, handling both v1 and v2 formats
+ * v1: settings.selectedAuthType (flat)
+ * v2: settings.security.auth.selectedType (nested)
+ */
+export function getSelectedAuthType(settings: Settings): string | undefined {
+  // Try v2 format first (nested)
+  const v2Value = getNestedValue(settings as Record<string, unknown>, [
+    'security',
+    'auth',
+    'selectedType',
+  ]);
+  if (v2Value !== undefined && typeof v2Value === 'string') {
+    return v2Value;
+  }
+
+  // Fall back to v1 format (flat)
+  const v1Value = (settings as any).selectedAuthType;
+  if (v1Value !== undefined && typeof v1Value === 'string') {
+    return v1Value;
+  }
+
+  return undefined;
+}

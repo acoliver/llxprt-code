@@ -98,6 +98,7 @@ import { useGitBranchName } from './hooks/useGitBranchName.js';
 import { useFocus } from './hooks/useFocus.js';
 import { useBracketedPaste } from './hooks/useBracketedPaste.js';
 import { useTextBuffer } from './components/shared/text-buffer.js';
+import { getSelectedAuthType } from '../utils/settingsUtils.js';
 import { useVimMode, VimModeProvider } from './contexts/VimModeContext.js';
 import { useVim } from './hooks/vim.js';
 import { useKeypress, Key } from './hooks/useKeypress.js';
@@ -493,15 +494,16 @@ const App = (props: AppInternalProps) => {
   } = useAuthCommand(settings, appState, config);
 
   useEffect(() => {
-    if (settings.merged.selectedAuthType && !settings.merged.useExternalAuth) {
-      const error = validateAuthMethod(settings.merged.selectedAuthType);
+    const selectedAuthType = getSelectedAuthType(settings.merged);
+    if (selectedAuthType && !settings.merged.useExternalAuth) {
+      const error = validateAuthMethod(selectedAuthType);
       if (error) {
         setAuthError(error);
         // Don't automatically open auth dialog - user must use /auth command
       }
     }
   }, [
-    settings.merged.selectedAuthType,
+    settings.merged,
     settings.merged.useExternalAuth,
     setAuthError,
   ]);

@@ -154,6 +154,16 @@ export async function createContentGenerator(
     return new GoogleGenAIWrapper(config, httpOptions);
   }
 
+  // Handle USE_PROVIDER - this should have a providerManager
+  if (config.authType === AuthType.USE_PROVIDER) {
+    if (!config.providerManager) {
+      throw new Error(
+        'USE_PROVIDER auth type requires a providerManager to be configured',
+      );
+    }
+    return new ProviderContentGenerator(config.providerManager, config);
+  }
+
   throw new Error(
     `Error creating contentGenerator: Unsupported authType: ${config.authType}`,
   );

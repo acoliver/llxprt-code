@@ -10,6 +10,7 @@ import { AuthType, Config, getErrorMessage } from '@vybestack/llxprt-code-core';
 import { useAppDispatch } from '../contexts/AppDispatchContext.js';
 import { AppState } from '../reducers/appReducer.js';
 import { getProviderManager } from '../../providers/providerManagerInstance.js';
+import { getSelectedAuthType } from '../../utils/settingsUtils.js';
 
 export const useAuthCommand = (
   settings: LoadedSettings,
@@ -22,10 +23,10 @@ export const useAuthCommand = (
   // Commented out to implement lazy authentication
   // Auth dialog will only open when explicitly triggered
   // useEffect(() => {
-  //   if (settings.merged.selectedAuthType === undefined) {
+  //   if (getSelectedAuthType(settings.merged) === undefined) {
   //     appDispatch({ type: 'OPEN_DIALOG', payload: 'auth' });
   //   }
-  // }, [settings.merged.selectedAuthType, appDispatch]); // Run only on mount
+  // }, [settings.merged, appDispatch]); // Run only on mount
 
   const openAuthDialog = useCallback(() => {
     appDispatch({ type: 'OPEN_DIALOG', payload: 'auth' });
@@ -35,14 +36,14 @@ export const useAuthCommand = (
 
   useEffect(() => {
     const authFlow = async () => {
-      const authType = settings.merged.selectedAuthType;
+      const authType = getSelectedAuthType(settings.merged);
       if (isAuthDialogOpen || !authType) {
         return;
       }
 
       try {
         setIsAuthenticating(true);
-        await config.refreshAuth(authType);
+        await config.refreshAuth(authType as AuthType);
 
         // Apply compression settings after authentication
         const contextLimit = config.getEphemeralSetting('context-limit') as

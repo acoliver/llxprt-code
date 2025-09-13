@@ -29,6 +29,7 @@ import {
   registerCleanup,
   runExitCleanup,
 } from './utils/cleanup.js';
+import { getSelectedAuthType } from './utils/settingsUtils.js';
 import { getCliVersion } from './utils/version.js';
 import type { Config } from '@vybestack/llxprt-code-core';
 import {
@@ -218,6 +219,18 @@ export async function main() {
     argv,
   );
 
+  // Set up provider manager early so it's available for auth operations
+  // This is needed for USE_PROVIDER auth type to work
+  const { getProviderManager } = await import('./providers/providerManagerInstance.js');
+  const providerManager = getProviderManager(config, false, settings);
+  config.setProviderManager(providerManager);
+  
+  // If config has a provider specified (from CLI or profile), set it as active
+  const configProvider = config.getProvider();
+  if (configProvider && configProvider !== 'gemini') {
+    providerManager.setActiveProvider(configProvider);
+  }
+
   if (argv.sessionSummary) {
     registerCleanup(() => {
       const metrics = uiTelemetryService.getMetrics();
@@ -255,7 +268,8 @@ export async function main() {
   }
 
   // Set a default auth type if one isn't set.
-  if (!settings.merged.selectedAuthType) {
+  const selectedAuthType = getSelectedAuthType(settings.merged);
+  if (!selectedAuthType) {
     if (process.env['CLOUD_SHELL'] === 'true') {
       settings.setValue(
         SettingScope.User,
@@ -304,19 +318,20 @@ export async function main() {
       : [];
     const sandboxConfig = config.getSandbox();
     if (sandboxConfig) {
+      const sandboxAuthType = getSelectedAuthType(settings.merged);
       if (
-        settings.merged.selectedAuthType &&
+        sandboxAuthType &&
         !settings.merged.useExternalAuth
       ) {
         // Validate authentication here because the sandbox will interfere with the Oauth2 web redirect.
         try {
           const err = validateAuthMethod(
-            settings.merged.selectedAuthType,
+            sandboxAuthType,
           );
           if (err) {
             throw new Error(err);
           }
-          await config.refreshAuth(settings.merged.selectedAuthType);
+          await config.refreshAuth(sandboxAuthType as AuthType);
         } catch (err) {
           console.error('Error authenticating:', err);
           process.exit(1);
@@ -364,13 +379,14 @@ export async function main() {
     }
   }
 
+  const preRenderAuthType = getSelectedAuthType(settings.merged);
   if (
-    settings.merged.selectedAuthType ===
+    preRenderAuthType ===
       AuthType.LOGIN_WITH_GOOGLE &&
     config.isBrowserLaunchSuppressed()
   ) {
     // Do oauth before app renders to make copying the link possible.
-    await getOauthClient(settings.merged.selectedAuthType, config);
+    await getOauthClient(preRenderAuthType, config);
   }
 
   if (config.getExperimentalZedIntegration()) {
@@ -414,7 +430,7 @@ export async function main() {
   });
 
   const nonInteractiveConfig = await validateNonInteractiveAuth(
-    settings.merged.selectedAuthType,
+    getSelectedAuthType(settings.merged) as AuthType | undefined,
     settings.merged.useExternalAuth,
     config,
     settings,
