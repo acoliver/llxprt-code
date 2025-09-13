@@ -7,7 +7,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ShellTool, EditTool, WriteFileTool } from '@vybestack/llxprt-code-core';
+import {
+  ShellTool,
+  EditTool,
+  WriteFileTool,
+} from '@vybestack/llxprt-code-core';
 import { loadCliConfig, parseArguments, type CliArgs } from './config.js';
 import type { Settings } from './settings.js';
 import type { Extension } from './extension.js';

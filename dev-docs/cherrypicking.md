@@ -1,5 +1,7 @@
 # Cherry-picking Guide for LLxprt Code
 
+**CRITICAL WARNING**: NEVER switch branches during cherry-picking operations. Always complete all work on the current branch before considering any branch changes.
+
 This guide documents the process for cherry-picking changes from the upstream gemini-cli repository while maintaining llxprt's multi-provider architecture and customizations.
 
 ## Overview

@@ -646,10 +646,14 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
   try {
     if (fs.existsSync(systemSettingsPath)) {
       const systemContent = fs.readFileSync(systemSettingsPath, 'utf-8');
-      const rawSystemSettings = JSON.parse(stripJsonComments(systemContent)) as Record<string, unknown>;
-      systemSettings = (needsMigration(rawSystemSettings) ? 
-        _migrateSettingsToV2(rawSystemSettings) ?? rawSystemSettings : 
-        rawSystemSettings) as Settings;
+      const rawSystemSettings = JSON.parse(
+        stripJsonComments(systemContent),
+      ) as Record<string, unknown>;
+      systemSettings = (
+        needsMigration(rawSystemSettings)
+          ? (_migrateSettingsToV2(rawSystemSettings) ?? rawSystemSettings)
+          : rawSystemSettings
+      ) as Settings;
     }
   } catch (error: unknown) {
     settingsErrors.push({
@@ -668,9 +672,11 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
       const rawSystemDefaults = JSON.parse(
         stripJsonComments(systemDefaultsContent),
       ) as Record<string, unknown>;
-      const migratedSystemDefaults = (needsMigration(rawSystemDefaults) ? 
-        _migrateSettingsToV2(rawSystemDefaults) ?? rawSystemDefaults : 
-        rawSystemDefaults) as Settings;
+      const migratedSystemDefaults = (
+        needsMigration(rawSystemDefaults)
+          ? (_migrateSettingsToV2(rawSystemDefaults) ?? rawSystemDefaults)
+          : rawSystemDefaults
+      ) as Settings;
       systemDefaultSettings = resolveEnvVarsInObject(migratedSystemDefaults);
     }
   } catch (error: unknown) {
@@ -684,10 +690,14 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
   try {
     if (fs.existsSync(USER_SETTINGS_PATH)) {
       const userContent = fs.readFileSync(USER_SETTINGS_PATH, 'utf-8');
-      const rawUserSettings = JSON.parse(stripJsonComments(userContent)) as Record<string, unknown>;
-      userSettings = (needsMigration(rawUserSettings) ? 
-        _migrateSettingsToV2(rawUserSettings) ?? rawUserSettings : 
-        rawUserSettings) as Settings;
+      const rawUserSettings = JSON.parse(
+        stripJsonComments(userContent),
+      ) as Record<string, unknown>;
+      userSettings = (
+        needsMigration(rawUserSettings)
+          ? (_migrateSettingsToV2(rawUserSettings) ?? rawUserSettings)
+          : rawUserSettings
+      ) as Settings;
       // Support legacy theme names
       if (userSettings.theme && userSettings.theme === 'VS') {
         userSettings.theme = DefaultLight.name;
@@ -710,9 +720,12 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
         const rawWorkspaceSettings = JSON.parse(
           stripJsonComments(projectContent),
         ) as Record<string, unknown>;
-        workspaceSettings = (needsMigration(rawWorkspaceSettings) ? 
-          _migrateSettingsToV2(rawWorkspaceSettings) ?? rawWorkspaceSettings : 
-          rawWorkspaceSettings) as Settings;
+        workspaceSettings = (
+          needsMigration(rawWorkspaceSettings)
+            ? (_migrateSettingsToV2(rawWorkspaceSettings) ??
+              rawWorkspaceSettings)
+            : rawWorkspaceSettings
+        ) as Settings;
         if (workspaceSettings.theme && workspaceSettings.theme === 'VS') {
           workspaceSettings.theme = DefaultLight.name;
         } else if (
@@ -807,9 +820,11 @@ export function loadSettings(workspaceDir: string): LoadedSettings {
 
   // Throw FatalConfigError if there were any parsing errors
   if (settingsErrors.length > 0) {
-    const errorMessages = settingsErrors.map(error => `Error in ${error.path}: ${error.message}`).join('\n');
+    const errorMessages = settingsErrors
+      .map((error) => `Error in ${error.path}: ${error.message}`)
+      .join('\n');
     throw new FatalConfigError(
-      `Configuration file errors detected:\n${errorMessages}\nPlease fix the configuration file(s) and try again.`
+      `Configuration file errors detected:\n${errorMessages}\nPlease fix the configuration file(s) and try again.`,
     );
   }
 

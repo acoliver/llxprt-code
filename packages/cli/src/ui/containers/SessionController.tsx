@@ -374,37 +374,49 @@ const SessionControllerInner: React.FC<SessionControllerProps> = ({
       if (error && isProQuotaExceededError(error)) {
         if (isPaidTier) {
           message = `You have reached your daily ${currentModel} quota limit.
-To continue using ${currentModel}, you can use /auth to switch to using a paid API key from AI Studio at https://aistudio.google.com/apikey
-Or you can switch to a different model using the /model command`;
+To continue, you can:
+• Use /auth to switch to a different authentication method (API key or different provider)
+• Wait until your quota resets tomorrow`;
         } else {
           message = `You have reached your daily ${currentModel} quota limit.
-To increase your limits, upgrade to a Gemini Code Assist Standard or Enterprise plan with higher limits at https://goo.gle/set-up-gemini-code-assist
-Or you can utilize a Gemini API Key. See: https://goo.gle/gemini-cli-docs-auth#gemini-api-key
-You can switch authentication methods by typing /auth or switch to a different model using /model`;
+To continue, you can:
+• Use /auth to switch to a different authentication method or provider
+• Wait until your quota resets tomorrow
+• For higher limits with Gemini, consider upgrading your plan`;
         }
       } else if (error && isGenericQuotaExceededError(error)) {
         if (isPaidTier) {
           message = `You have reached your daily quota limit.
-To continue, consider using /auth to switch to using a paid API key from AI Studio at https://aistudio.google.com/apikey
-Or you can switch to a different model using the /model command`;
+To continue, you can:
+• Use /auth to switch to a different authentication method or provider
+• Wait until your quota resets`;
         } else {
           message = `You have reached your daily quota limit.
-To increase your limits, upgrade to a Gemini Code Assist Standard or Enterprise plan with higher limits at https://goo.gle/set-up-gemini-code-assist
-Or you can utilize a Gemini API Key. See: https://goo.gle/gemini-cli-docs-auth#gemini-api-key
+To continue, you can:
+• Use /auth to switch to a different authentication method or provider
+• Wait until your quota resets
+• For higher limits, consider using an API key or upgrading your plan
 You can switch authentication methods by typing /auth or switch to a different model using /model`;
         }
       } else {
         if (isPaidTier) {
           message = `You are experiencing capacity issues with ${currentModel}.
-Possible reasons are consecutive capacity errors or reaching your daily ${currentModel} quota limit.
-To continue, consider using /auth to switch to using a paid API key from AI Studio at https://aistudio.google.com/apikey
-Or you can switch to a different model using the /model command`;
+Possible reasons:
+• Temporary capacity constraints
+• Daily quota limit reached
+
+To continue, you can:
+• Wait a few moments and try again
+• Use /auth to switch to a different provider or authentication method`;
         } else {
           message = `You are experiencing capacity issues with ${currentModel}.
-Possible reasons are consecutive capacity errors or reaching your daily ${currentModel} quota limit.
-To increase your limits, upgrade to a Gemini Code Assist Standard or Enterprise plan with higher limits at https://goo.gle/set-up-gemini-code-assist
-Or you can utilize a Gemini API Key. See: https://goo.gle/gemini-cli-docs-auth#gemini-api-key
-You can switch authentication methods by typing /auth or switch to a different model using /model`;
+Possible reasons:
+• Temporary capacity constraints
+• Daily quota limit reached
+
+To continue, you can:
+• Wait a few moments and try again
+• Use /auth to switch to a different provider or authentication method`;
         }
       }
 

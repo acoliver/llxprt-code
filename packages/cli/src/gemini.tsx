@@ -221,10 +221,12 @@ export async function main() {
 
   // Set up provider manager early so it's available for auth operations
   // This is needed for USE_PROVIDER auth type to work
-  const { getProviderManager } = await import('./providers/providerManagerInstance.js');
+  const { getProviderManager } = await import(
+    './providers/providerManagerInstance.js'
+  );
   const providerManager = getProviderManager(config, false, settings);
   config.setProviderManager(providerManager);
-  
+
   // If config has a provider specified (from CLI or profile), set it as active
   const configProvider = config.getProvider();
   if (configProvider && configProvider !== 'gemini') {
@@ -319,15 +321,10 @@ export async function main() {
     const sandboxConfig = config.getSandbox();
     if (sandboxConfig) {
       const sandboxAuthType = getSelectedAuthType(settings.merged);
-      if (
-        sandboxAuthType &&
-        !settings.merged.useExternalAuth
-      ) {
+      if (sandboxAuthType && !settings.merged.useExternalAuth) {
         // Validate authentication here because the sandbox will interfere with the Oauth2 web redirect.
         try {
-          const err = validateAuthMethod(
-            sandboxAuthType,
-          );
+          const err = validateAuthMethod(sandboxAuthType);
           if (err) {
             throw new Error(err);
           }
@@ -381,8 +378,7 @@ export async function main() {
 
   const preRenderAuthType = getSelectedAuthType(settings.merged);
   if (
-    preRenderAuthType ===
-      AuthType.LOGIN_WITH_GOOGLE &&
+    preRenderAuthType === AuthType.LOGIN_WITH_GOOGLE &&
     config.isBrowserLaunchSuppressed()
   ) {
     // Do oauth before app renders to make copying the link possible.

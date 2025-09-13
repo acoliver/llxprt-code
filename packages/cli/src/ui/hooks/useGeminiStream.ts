@@ -505,7 +505,9 @@ export const useGeminiStream = (
           'Response stopped due to unexpected tool call.',
       };
 
-      const message = finishReason ? finishReasonMessages[finishReason] : undefined;
+      const message = finishReason
+        ? finishReasonMessages[finishReason]
+        : undefined;
       if (message) {
         addItem(
           {

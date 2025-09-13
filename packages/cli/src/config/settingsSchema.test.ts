@@ -19,7 +19,7 @@ describe('SettingsSchema', () => {
         'hideBanner',
         'hideFooter',
         'showMemoryUsage',
-        
+
         // General settings
         'usageStatisticsEnabled',
         'autoConfigureMaxOldSpaceSize',
@@ -31,16 +31,16 @@ describe('SettingsSchema', () => {
         'vimMode',
         'ideMode',
         'emojifilter',
-        
+
         // File filtering
         'fileFiltering',
-        
+
         // Updates
         'disableAutoUpdate',
-        
+
         // Shell
         'shouldUseNodePtyShell',
-        
+
         // Advanced settings
         'selectedAuthType',
         'useExternalAuth',
@@ -55,7 +55,7 @@ describe('SettingsSchema', () => {
         'allowMCPServers',
         'excludeMCPServers',
         'telemetry',
-        
+
         // Nested object settings
         'accessibility',
         'checkpointing',
@@ -64,7 +64,7 @@ describe('SettingsSchema', () => {
         'tools',
         'mcp',
         'advanced',
-        
+
         // Compatibility settings (flat)
         'summarizeToolOutput',
         'dnsResolutionOrder',
@@ -78,7 +78,7 @@ describe('SettingsSchema', () => {
         'showLineNumbers',
         'useRipgrep',
         'debugKeystrokeLogging',
-        
+
         // LLxprt-specific provider settings
         'defaultProfile',
         'providerApiKeys',
@@ -86,15 +86,15 @@ describe('SettingsSchema', () => {
         'providerToolFormatOverrides',
         'providerKeyfiles',
         'oauthEnabledProviders',
-        
+
         // Feature flags
         'extensionManagement',
         'extensions',
-        
+
         // Tool settings
         'enableTextToolCallParsing',
         'textToolCallModels',
-        
+
         // API settings
         'openaiResponsesEnabled',
         'shellReplacement',

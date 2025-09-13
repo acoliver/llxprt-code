@@ -205,11 +205,7 @@ export const ideCommand = async (): Promise<SlashCommand> => {
         Date.now(),
       );
       if (result.success) {
-        context.services.settings.setValue(
-          SettingScope.User,
-          'ideMode',
-          true,
-        );
+        context.services.settings.setValue(SettingScope.User, 'ideMode', true);
         // Poll for up to 5 seconds for the extension to activate.
         for (let i = 0; i < 10; i++) {
           await setIdeModeAndSyncConnection(context.services.config!, true);
@@ -249,11 +245,7 @@ export const ideCommand = async (): Promise<SlashCommand> => {
     description: 'enable IDE integration',
     kind: CommandKind.BUILT_IN,
     action: async (context: CommandContext) => {
-      context.services.settings.setValue(
-        SettingScope.User,
-        'ideMode',
-        true,
-      );
+      context.services.settings.setValue(SettingScope.User, 'ideMode', true);
       await setIdeModeAndSyncConnection(context.services.config!, true);
       const { messageType, content } = getIdeStatusMessage(ideClient);
       context.ui.addItem(
@@ -271,11 +263,7 @@ export const ideCommand = async (): Promise<SlashCommand> => {
     description: 'disable IDE integration',
     kind: CommandKind.BUILT_IN,
     action: async (context: CommandContext) => {
-      context.services.settings.setValue(
-        SettingScope.User,
-        'ideMode',
-        false,
-      );
+      context.services.settings.setValue(SettingScope.User, 'ideMode', false);
       await setIdeModeAndSyncConnection(context.services.config!, false);
       const { messageType, content } = getIdeStatusMessage(ideClient);
       context.ui.addItem(
