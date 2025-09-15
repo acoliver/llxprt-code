@@ -28,7 +28,7 @@ import {
   UnauthorizedError,
   toFriendlyError,
 } from '../utils/errors.js';
-import { GeminiChat } from './geminiChat.js';
+import { Chat } from './chat.js';
 import { DebugLogger } from '../debug/index.js';
 
 // Define a structure for tools passed to the server
@@ -150,7 +150,7 @@ export interface ChatCompressionInfo {
   compressionStatus: CompressionStatus;
 }
 
-export type ServerGeminiChatCompressedEvent = {
+export type ServerChatCompressedEvent = {
   type: GeminiEventType.ChatCompressed;
   value: ChatCompressionInfo | null;
 };
@@ -185,7 +185,7 @@ export type ServerGeminiStreamEvent =
   | ServerGeminiToolCallConfirmationEvent
   | ServerGeminiUserCancelledEvent
   | ServerGeminiErrorEvent
-  | ServerGeminiChatCompressedEvent
+  | ServerChatCompressedEvent
   | ServerGeminiThoughtEvent
   | ServerGeminiUsageMetadataEvent
   | ServerGeminiMaxSessionTurnsEvent
@@ -200,7 +200,7 @@ export class Turn {
   private logger: DebugLogger;
 
   constructor(
-    private readonly chat: GeminiChat,
+    private readonly chat: Chat,
     private readonly prompt_id: string,
     private readonly providerName: string = 'backend',
   ) {

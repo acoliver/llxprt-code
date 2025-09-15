@@ -34,7 +34,7 @@ import {
 } from './contentGenerator.js';
 import type { Mock } from 'vitest';
 import type { ConfigParameters } from '../config/config.js';
-import { GeminiChat } from './geminiChat.js';
+import { Chat } from './chat.js';
 import { Config } from '../config/config.js';
 import {
   CompressionStatus,
@@ -568,10 +568,10 @@ describe('Gemini Client (client.ts)', () => {
 
   describe('addHistory', () => {
     it('should call chat.addHistory with the provided content', async () => {
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const newContent = {
         role: 'user',
@@ -592,7 +592,7 @@ describe('Gemini Client (client.ts)', () => {
       );
 
       // Mock addHistory to update the state
-      const mockChat = client['chat'] as GeminiChat;
+      const mockChat = client['chat'] as Chat;
       mockChat.addHistory.mockImplementation((content: Content) => {
         historyState.push(content);
         return Promise.resolve();
@@ -631,7 +631,7 @@ describe('Gemini Client (client.ts)', () => {
           clearHistory: vi.fn(),
           sendMessageStream: vi.fn(),
         };
-        client['chat'] = newMockChat as GeminiChat;
+        client['chat'] = newMockChat as Chat;
       });
 
       // 2. Call resetChat.
@@ -672,7 +672,7 @@ describe('Gemini Client (client.ts)', () => {
           getTotalTokens: mockGetTotalTokens,
           emit: vi.fn(),
         }),
-      } as unknown as GeminiChat;
+      } as unknown as Chat;
 
       // Mock startChat to return a chat with getHistoryService that returns newTokenCount
       client['startChat'] = vi.fn().mockImplementation(() =>
@@ -842,7 +842,7 @@ describe('Gemini Client (client.ts)', () => {
       });
 
       // Ensure the client's chat uses our mock
-      const mockChat = client['chat'] as GeminiChat;
+      const mockChat = client['chat'] as Chat;
       mockChat.sendMessage = mockSendMessage;
 
       const initialChat = client.getChat();
@@ -886,11 +886,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -943,11 +943,11 @@ describe('Gemini Client (client.ts)', () => {
         })();
         mockTurnRunFn.mockReturnValue(mockStream);
 
-        const mockChat: Partial<GeminiChat> = {
+        const mockChat: Partial<Chat> = {
           addHistory: vi.fn(),
           getHistory: vi.fn().mockReturnValue([]),
         };
-        client['chat'] = mockChat as GeminiChat;
+        client['chat'] = mockChat as Chat;
 
         const mockGenerator: Partial<ContentGenerator> = {
           countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1013,11 +1013,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1063,11 +1063,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1118,11 +1118,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1176,11 +1176,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1217,11 +1217,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1282,11 +1282,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1374,11 +1374,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1435,11 +1435,11 @@ describe('Gemini Client (client.ts)', () => {
       })();
       mockTurnRunFn.mockReturnValue(mockStream);
 
-      const mockChat: Partial<GeminiChat> = {
+      const mockChat: Partial<Chat> = {
         addHistory: vi.fn(),
         getHistory: vi.fn().mockReturnValue([]),
       };
-      client['chat'] = mockChat as GeminiChat;
+      client['chat'] = mockChat as Chat;
 
       const mockGenerator: Partial<ContentGenerator> = {
         countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -1513,7 +1513,7 @@ describe('Gemini Client (client.ts)', () => {
         vi.spyOn(client['config'], 'getIdeMode').mockReturnValue(true);
         mockTurnRunFn.mockReturnValue(mockStream);
 
-        const mockChat: Partial<GeminiChat> = {
+        const mockChat: Partial<Chat> = {
           addHistory: vi.fn(),
           setHistory: vi.fn(),
           sendMessage: vi.fn().mockResolvedValue({ text: 'summary' }),
@@ -1524,7 +1524,7 @@ describe('Gemini Client (client.ts)', () => {
               { role: 'user', parts: [{ text: 'previous message' }] },
             ]),
         };
-        client['chat'] = mockChat as GeminiChat;
+        client['chat'] = mockChat as Chat;
 
         // Override the client.getHistory mock to return non-empty history for delta tests
         (client.getHistory as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1765,7 +1765,7 @@ describe('Gemini Client (client.ts)', () => {
     });
 
     describe('IDE context with pending tool calls', () => {
-      let mockChat: Partial<GeminiChat>;
+      let mockChat: Partial<Chat>;
 
       beforeEach(() => {
         vi.spyOn(client, 'tryCompressChat').mockResolvedValue({
@@ -1785,7 +1785,7 @@ describe('Gemini Client (client.ts)', () => {
           setHistory: vi.fn(),
           sendMessage: vi.fn().mockResolvedValue({ text: 'summary' }),
         };
-        client['chat'] = mockChat as GeminiChat;
+        client['chat'] = mockChat as Chat;
 
         const mockGenerator: Partial<ContentGenerator> = {
           countTokens: vi.fn().mockResolvedValue({ totalTokens: 0 }),
@@ -2328,7 +2328,7 @@ describe('Gemini Client (client.ts)', () => {
       const mockChat = {
         setHistory: vi.fn(),
       };
-      client['chat'] = mockChat as unknown as GeminiChat;
+      client['chat'] = mockChat as unknown as Chat;
 
       const historyWithThoughts: Content[] = [
         {
@@ -2370,7 +2370,7 @@ describe('Gemini Client (client.ts)', () => {
       const mockChat = {
         setHistory: vi.fn(),
       };
-      client['chat'] = mockChat as unknown as GeminiChat;
+      client['chat'] = mockChat as unknown as Chat;
 
       const historyWithThoughts: Content[] = [
         {
@@ -2416,7 +2416,7 @@ describe('Gemini Client (client.ts)', () => {
       const mockChat = {
         setHistory: vi.fn(),
       };
-      client['chat'] = mockChat as unknown as GeminiChat;
+      client['chat'] = mockChat as unknown as Chat;
       vi.spyOn(client, 'hasChatInitialized').mockReturnValue(true);
 
       const history: Content[] = [
@@ -2440,7 +2440,7 @@ describe('Gemini Client (client.ts)', () => {
       const mockChat = {
         setHistory: vi.fn(),
       };
-      client['chat'] = mockChat as unknown as GeminiChat;
+      client['chat'] = mockChat as unknown as Chat;
       vi.spyOn(client, 'hasChatInitialized').mockReturnValue(true);
 
       const history: Content[] = [

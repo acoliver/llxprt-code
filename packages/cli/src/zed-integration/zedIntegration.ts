@@ -10,7 +10,7 @@ import {
   AuthType,
   Config,
   ContentGeneratorConfig,
-  GeminiChat,
+  Chat,
   logToolCall,
   ToolResult,
   convertToFunctionResponse,
@@ -416,7 +416,7 @@ class Session {
 
   constructor(
     private readonly id: string,
-    private readonly chat: GeminiChat,
+    private readonly chat: Chat,
     private readonly config: Config,
     private readonly client: acp.Client,
   ) {

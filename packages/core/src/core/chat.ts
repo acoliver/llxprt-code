@@ -20,7 +20,7 @@ import {
 } from '@google/genai';
 import { retryWithBackoff } from '../utils/retry.js';
 import { isFunctionResponse } from '../utils/messageInspectors.js';
-import { ContentGenerator, AuthType } from './contentGenerator.js';
+import { ContentGenerator } from './contentGenerator.js';
 import { Config } from '../config/config.js';
 import { HistoryService } from '../services/history/HistoryService.js';
 import { ContentConverters } from '../services/history/ContentConverters.js';
@@ -43,7 +43,6 @@ import {
   ApiRequestEvent,
   ApiResponseEvent,
 } from '../telemetry/types.js';
-import { DEFAULT_GEMINI_FLASH_MODEL } from '../config/models.js';
 import { hasCycleInSchema } from '../tools/tools.js';
 import { isStructuredError } from '../utils/quotaErrorDetection.js';
 import { DebugLogger } from '../debug/index.js';
@@ -225,14 +224,14 @@ export class EmptyStreamError extends Error {
  * @remarks
  * The session maintains all the turns between user and model.
  */
-export class GeminiChat {
+export class Chat {
   // A promise to represent the current state of the message being sent to the
   // model.
   private sendPromise: Promise<void> = Promise.resolve();
   // A promise to represent any ongoing compression operation
   private compressionPromise: Promise<void> | null = null;
   private historyService: HistoryService;
-  private logger = new DebugLogger('llxprt:gemini:chat');
+  private logger = new DebugLogger('llxprt:chat');
   // Cache the compression threshold to avoid recalculating
   private cachedCompressionThreshold: number | null = null;
 
@@ -248,7 +247,7 @@ export class GeminiChat {
     // Use provided HistoryService or create a new one
     this.historyService = historyService || new HistoryService();
 
-    this.logger.debug('GeminiChat initialized:', {
+    this.logger.debug('Chat initialized:', {
       model: this.config.getModel(),
       initialHistoryLength: initialHistory.length,
       hasHistoryService: !!historyService,
@@ -351,53 +350,6 @@ export class GeminiChat {
     );
   }
 
-  /**
-   * Handles falling back to Flash model when persistent 429 errors occur for OAuth users.
-   * Uses a fallback handler if provided by the config; otherwise, returns null.
-   */
-  private async handleFlashFallback(
-    authType?: string,
-    error?: unknown,
-  ): Promise<string | null> {
-    // Only handle fallback for OAuth users, not for providers
-    if (authType !== AuthType.LOGIN_WITH_GOOGLE) {
-      return null;
-    }
-
-    const currentModel = this.config.getModel();
-    const fallbackModel = DEFAULT_GEMINI_FLASH_MODEL;
-
-    // Don't fallback if already using Flash model
-    if (currentModel === fallbackModel) {
-      return null;
-    }
-
-    // Check if config has a fallback handler (set by CLI package)
-    const fallbackHandler = this.config.flashFallbackHandler;
-    if (typeof fallbackHandler === 'function') {
-      try {
-        const accepted = await fallbackHandler(
-          currentModel,
-          fallbackModel,
-          error,
-        );
-        if (accepted !== false && accepted !== null) {
-          this.config.setModel(fallbackModel);
-          this.config.setFallbackMode(true);
-          return fallbackModel;
-        }
-        // Check if the model was switched manually in the handler
-        if (this.config.getModel() === fallbackModel) {
-          return null; // Model was switched but don't continue with current prompt
-        }
-      } catch (error) {
-        this.logger.warn(() => 'Flash fallback handler failed:', { error });
-      }
-    }
-
-    return null;
-  }
-
   setSystemInstruction(sysInstr: string) {
     this.generationConfig.systemInstruction = sysInstr;
   }
@@ -493,15 +445,10 @@ export class GeminiChat {
 
     try {
       const apiCall = async () => {
-        const modelToUse = this.config.getModel() || DEFAULT_GEMINI_FLASH_MODEL;
-
-        // Prevent Flash model calls immediately after quota error
-        if (
-          this.config.getQuotaErrorOccurred() &&
-          modelToUse === DEFAULT_GEMINI_FLASH_MODEL
-        ) {
+        const modelToUse = this.config.getModel();
+        if (!modelToUse) {
           throw new Error(
-            'Please submit a new query to continue with the Flash model.',
+            'No model configured. Please set a model using /set or check your configuration.',
           );
         }
 
@@ -525,7 +472,7 @@ export class GeminiChat {
           if (totalFunctionDeclarations === 0) {
             this.logger.warn(
               () =>
-                `[geminiChat] WARNING: Tools array exists but has 0 function declarations!`,
+                `[Chat] WARNING: Tools array exists but has 0 function declarations!`,
               {
                 tools,
                 modelToUse,
@@ -537,8 +484,7 @@ export class GeminiChat {
 
         // Debug log what tools we're passing to the provider
         this.logger.debug(
-          () =>
-            `[GeminiChat] Passing tools to provider.generateChatCompletion:`,
+          () => `[Chat] Passing tools to provider.generateChatCompletion:`,
           {
             hasTools: !!tools,
             toolsLength: tools?.length,
@@ -600,8 +546,6 @@ export class GeminiChat {
           }
           return false; // Don't retry other errors by default
         },
-        onPersistent429: async (authType?: string, error?: unknown) =>
-          await this.handleFlashFallback(authType, error),
         authType: this.config.getContentGeneratorConfig()?.authType,
       });
       const durationMs = Date.now() - startTime;
@@ -721,33 +665,33 @@ export class GeminiChat {
     prompt_id: string,
   ): Promise<AsyncGenerator<GenerateContentResponse>> {
     this.logger.debug(
-      () => 'DEBUG [geminiChat]: ===== SEND MESSAGE STREAM START =====',
+      () => 'DEBUG [Chat]: ===== SEND MESSAGE STREAM START =====',
     );
     this.logger.debug(
-      () => `DEBUG [geminiChat]: Model from config: ${this.config.getModel()}`,
+      () => `DEBUG [Chat]: Model from config: ${this.config.getModel()}`,
     );
     this.logger.debug(
-      () => `DEBUG [geminiChat]: Params: ${JSON.stringify(params, null, 2)}`,
+      () => `DEBUG [Chat]: Params: ${JSON.stringify(params, null, 2)}`,
     );
     this.logger.debug(
-      () => `DEBUG [geminiChat]: Message type: ${typeof params.message}`,
-    );
-    this.logger.debug(
-      () =>
-        `DEBUG [geminiChat]: Message content: ${JSON.stringify(params.message, null, 2)}`,
-    );
-    this.logger.debug(() => 'DEBUG: GeminiChat.sendMessageStream called');
-    this.logger.debug(
-      () =>
-        `DEBUG: GeminiChat.sendMessageStream params: ${JSON.stringify(params, null, 2)}`,
+      () => `DEBUG [Chat]: Message type: ${typeof params.message}`,
     );
     this.logger.debug(
       () =>
-        `DEBUG: GeminiChat.sendMessageStream params.message type: ${typeof params.message}`,
+        `DEBUG [Chat]: Message content: ${JSON.stringify(params.message, null, 2)}`,
+    );
+    this.logger.debug(() => 'DEBUG: Chat.sendMessageStream called');
+    this.logger.debug(
+      () =>
+        `DEBUG: Chat.sendMessageStream params: ${JSON.stringify(params, null, 2)}`,
     );
     this.logger.debug(
       () =>
-        `DEBUG: GeminiChat.sendMessageStream params.message: ${JSON.stringify(params.message, null, 2)}`,
+        `DEBUG: Chat.sendMessageStream params.message type: ${typeof params.message}`,
+    );
+    this.logger.debug(
+      () =>
+        `DEBUG: Chat.sendMessageStream params.message: ${JSON.stringify(params.message, null, 2)}`,
     );
     await this.sendPromise;
 
@@ -881,16 +825,9 @@ export class GeminiChat {
 
     const apiCall = async () => {
       const modelToUse = this.config.getModel();
-      const authType = this.config.getContentGeneratorConfig()?.authType;
-
-      // Prevent Flash model calls immediately after quota error (only for Gemini providers)
-      if (
-        authType !== AuthType.USE_PROVIDER &&
-        this.config.getQuotaErrorOccurred() &&
-        modelToUse === DEFAULT_GEMINI_FLASH_MODEL
-      ) {
+      if (!modelToUse) {
         throw new Error(
-          'Please submit a new query to continue with the Flash model.',
+          'No model configured. Please set a model using /set or check your configuration.',
         );
       }
 
@@ -923,7 +860,7 @@ export class GeminiChat {
       // DEBUG: Check for malformed entries
       this.logger.debug(
         () =>
-          `[DEBUG] geminiChat IContent request (history + new message): ${JSON.stringify(requestContents, null, 2)}`,
+          `[DEBUG] Chat IContent request (history + new message): ${JSON.stringify(requestContents, null, 2)}`,
       );
 
       // Get tools in the format the provider expects
@@ -960,8 +897,6 @@ export class GeminiChat {
         }
         return false;
       },
-      onPersistent429: async (authType?: string, error?: unknown) =>
-        await this.handleFlashFallback(authType, error),
       authType: this.config.getContentGeneratorConfig()?.authType,
     });
 

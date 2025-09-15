@@ -18,7 +18,7 @@ import {
   FunctionDeclaration,
   Type,
 } from '@google/genai';
-import { GeminiChat } from './geminiChat.js';
+import { Chat } from './chat.js';
 
 /**
  * @fileoverview Defines the configuration interfaces for a subagent.
@@ -594,7 +594,7 @@ export class SubAgentScope {
 
       this.runtimeContext.setModel(this.modelConfig.model);
 
-      return new GeminiChat(
+      return new Chat(
         this.runtimeContext,
         contentGenerator,
         generationConfig,

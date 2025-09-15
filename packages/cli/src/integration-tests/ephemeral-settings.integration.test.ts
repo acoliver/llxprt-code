@@ -93,11 +93,11 @@ describe('Ephemeral Settings Integration Tests', () => {
 
       // Get the GeminiClient from config
       // Verify compression settings are stored in ephemeral settings
-      // (actual compression happens internally in geminiChat when needed)
+      // (actual compression happens internally in Chat when needed)
       expect(config.getEphemeralSetting('compression-threshold')).toBe(0.6);
       expect(config.getEphemeralSetting('context-limit')).toBe(100000);
 
-      // Compression validation now happens in geminiChat when it reads the settings
+      // Compression validation now happens in Chat when it reads the settings
     });
   });
 

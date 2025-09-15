@@ -184,7 +184,7 @@ describe('mcp server with cyclic tool schema is detected', () => {
   it.skip('should error and suggest disabling the cyclic tool', async () => {
     // Just run any command to trigger the schema depth error.
     // If this test starts failing, check `isSchemaDepthError` from
-    // geminiChat.ts to see if it needs to be updated.
+    // chat.ts to see if it needs to be updated.
     // Or, possibly it could mean that gemini has fixed the issue.
     const output = await rig.run('hello');
 

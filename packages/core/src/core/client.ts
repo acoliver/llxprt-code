@@ -24,7 +24,7 @@ import { UserTierId } from '../code_assist/types.js';
 import { getCoreSystemPromptAsync, getCompressionPrompt } from './prompts.js';
 import { getResponseText } from '../utils/generateContentResponseUtilities.js';
 import { reportError } from '../utils/errorReporting.js';
-import { GeminiChat } from './geminiChat.js';
+import { Chat } from './chat.js';
 import { DebugLogger } from '../debug/index.js';
 import { HistoryService } from '../services/history/HistoryService.js';
 import { ContentConverters } from '../services/history/ContentConverters.js';
@@ -104,7 +104,7 @@ export function findIndexAfterFraction(
 }
 
 export class GeminiClient {
-  private chat?: GeminiChat;
+  private chat?: Chat;
   private contentGenerator?: ContentGenerator;
   private embeddingModel: string;
   private logger: DebugLogger;
@@ -216,7 +216,7 @@ export class GeminiClient {
     this.getChat().addHistory(content);
   }
 
-  getChat(): GeminiChat {
+  getChat(): Chat {
     if (!this.chat) {
       throw new Error('Chat not initialized');
     }
@@ -383,7 +383,7 @@ export class GeminiClient {
     });
   }
 
-  async startChat(extraHistory?: Content[]): Promise<GeminiChat> {
+  async startChat(extraHistory?: Content[]): Promise<Chat> {
     this.forceFullIdeContext = true;
     this.hasFailedCompressionAttempt = false;
 
@@ -452,7 +452,7 @@ export class GeminiClient {
             },
           }
         : this.generateContentConfig;
-      return new GeminiChat(
+      return new Chat(
         this.config,
         this.getContentGenerator(),
         {
